@@ -56,6 +56,7 @@ from sklearn.model_selection import LeaveOneGroupOut
 import sys
 from tqdm import tqdm
 import joblib
+import datetime
 
 # --- Parameters ---
 FS = 250  # Sampling frequency (Hz), adjust if needed
@@ -313,6 +314,47 @@ def plot_stimulus_stats_time(preds, stim_labels, epoch_sec=2):
     # Fix: Save and close instead of plt.show() to avoid blocking
     plt.savefig('emotion_proportion_over_time.png')
     plt.close()
+
+def add_side_text_to_plot(ax, text):
+    """Add a descriptive text box to the right side of a plot."""
+    ax.text(1.02, 0.5, text, va='center', ha='left', fontsize=11, transform=ax.transAxes, wrap=True, bbox=dict(facecolor='white', alpha=0.7, edgecolor='gray'))
+
+def plot_stimulus_stats_time_with_text(preds, stim_labels, epoch_sec=2, filename='emotion_proportion_over_time.png'):
+    df = pd.DataFrame({'emotion': preds, 'stimulus': stim_labels})
+    df['window'] = df.index
+    df['time_sec'] = df['window'] * epoch_sec
+    pivot = df.pivot_table(index='time_sec', columns='emotion', aggfunc='size', fill_value=0)
+    pivot_prop = pivot.div(pivot.sum(axis=1), axis=0).fillna(0)
+    pivot_prop = pivot_prop.clip(0, 1)
+    fig, ax = plt.subplots(figsize=(14, 7))
+    pivot_prop.plot.area(ax=ax, cmap='tab10', alpha=0.85)
+    legend_labels = set()
+    for stim, color in zip(['warm', 'cold', 'neutral'], ['#FFDDC1', '#B5D8FA', '#EEEEEE']):
+        for start, end, stim_type in STIM_PERIODS:
+            if stim_type == stim:
+                label = stim if stim not in legend_labels else None
+                ax.axvspan(start, end, color=color, alpha=0.18, label=label)
+                legend_labels.add(stim)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Proportion')
+    ax.set_title('Emotion Proportion Over Time by Stimulus Period (Smoothed)')
+    ax.legend(loc='upper right')
+    text = (
+        "This plot represents how the proportion of each predicted emotion changes over time during the EEG recording.\n\n"
+        "What it shows:\n"
+        "- The x-axis is time (in seconds or epochs/windows).\n"
+        "- The y-axis is the proportion (from 0 to 1) of each emotion in each time window.\n"
+        "- Each colored area corresponds to a different emotion label (e.g., calm, angry, excited, sad).\n"
+        "- At each time point, the height of each colored region shows the fraction of windows classified as that emotion at that time.\n"
+        "- The plot overlays the stimulus periods (e.g., warm, cold, neutral) as shaded regions, so you can see how emotion proportions change in response to different stimuli.\n\n"
+        "Purpose:\n"
+        "- To visualize the dynamics of emotional state estimates over the course of the experiment.\n"
+        "- To see how the subject’s predicted emotions respond to different color stimuli or time periods."
+    )
+    add_side_text_to_plot(ax, text)
+    plt.tight_layout(rect=[0, 0, 0.8, 1])
+    plt.savefig(filename)
+    plt.close(fig)
 
 def save_filtering_stats(eeg_raw, eeg_filt, filename):
     stats = []
@@ -734,6 +776,71 @@ def plot_band_power_over_time_all_channels(epochs, fs, filename, file_label):
     plt.savefig(filename)
     plt.close(fig)
 
+# --- Alpha/Beta Ratio Visualization ---
+def plot_alpha_beta_ratio_over_time(epochs, fs, filename, file_label):
+    """
+    Plot the alpha/beta power ratio over time for each channel, with the file name in the title.
+    """
+    n_epochs, _, n_channels = epochs.shape
+    alpha_idx = list(BANDS.keys()).index('alpha')
+    beta_idx = list(BANDS.keys()).index('beta')
+    ratios = np.zeros((n_epochs, n_channels))
+    for i in range(n_epochs):
+        for ch in range(n_channels):
+            alpha = compute_band_power(epochs[i, :, ch], fs, BANDS['alpha'])
+            beta = compute_band_power(epochs[i, :, ch], fs, BANDS['beta'])
+            ratios[i, ch] = alpha / (beta + 1e-8)
+    plt.figure(figsize=(14, 2*n_channels))
+    for ch in range(n_channels):
+        plt.plot(ratios[:, ch], label=CHANNELS[ch])
+    plt.xlabel('Epoch (Time)')
+    plt.ylabel('Alpha/Beta Ratio')
+    plt.title(f'Alpha/Beta Power Ratio Over Time\nFile: {file_label}')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+    return ratios
+
+def save_alpha_beta_ratio_csv(ratios, filename, file_label):
+    df = pd.DataFrame(ratios, columns=CHANNELS)
+    df['file'] = file_label
+    df['epoch'] = np.arange(len(df))
+    df.to_csv(filename, index=False)
+    return df
+
+def save_emotion_proportions_csv(preds, stim_labels, filename, file_label):
+    df = pd.DataFrame({'emotion': preds, 'stimulus': stim_labels})
+    df['file'] = file_label
+    df['epoch'] = np.arange(len(df))
+    # Compute proportions per stimulus period
+    proportions = []
+    for stim in df['stimulus'].unique():
+        sub = df[df['stimulus'] == stim]
+        prop = sub['emotion'].value_counts(normalize=True).to_dict()
+        prop['stimulus'] = stim
+        prop['file'] = file_label
+        proportions.append(prop)
+    prop_df = pd.DataFrame(proportions)
+    prop_df.to_csv(filename, index=False)
+    return prop_df
+
+# --- New: Save bandpower values to CSV ---
+def save_bandpower_csv(epochs, fs, filename, file_label):
+    n_epochs, _, n_channels = epochs.shape
+    band_names = list(BANDS.keys())
+    data = []
+    for i in range(n_epochs):
+        row = {'file': file_label, 'epoch': i}
+        for ch in range(n_channels):
+            for b, band in enumerate(band_names):
+                val = compute_band_power(epochs[i, :, ch], fs, BANDS[band])
+                row[f'{CHANNELS[ch]}_{band}'] = val
+        data.append(row)
+    df = pd.DataFrame(data)
+    df.to_csv(filename, index=False)
+    return df
+
 # --- Main Pipeline ---
 if __name__ == "__main__":
     # --- Model/Scaler/PCA file names ---
@@ -800,7 +907,7 @@ if __name__ == "__main__":
     n_windows = len(preds)
     stim_labels = get_stimulus_labels(n_windows, FS, EPOCH_SEC)
     print_progress("Plotting emotion proportions over time (improved)...")
-    plot_stimulus_stats_time(preds, stim_labels, epoch_sec=EPOCH_SEC)
+    plot_stimulus_stats_time_with_text(preds, stim_labels, epoch_sec=EPOCH_SEC)
     print("Done.")
 
     print_progress("Saving statistics and plots to PDF and CSV...")
@@ -853,57 +960,104 @@ if __name__ == "__main__":
     plot_eeg_pattern_based_labels(epochs, FS, filename='pattern_based_emotion_labels.png', file_label='test_file')
     print_progress("Pattern-based emotion labels visualization saved.")
 
-# --- Per-file visualizations ---
-    test_files = glob.glob('data/toClasify/*.csv')
-    for test_file in test_files:
-        file_label = os.path.basename(test_file)
-        print_progress(f"Analyzing EEG file: {file_label} using advanced features...")
-        eeg_raw = load_eeg_csv(test_file)
-        eeg_filt = bandpass_filter(eeg_raw, *BANDPASS, FS)
-        eeg_filt = notch_filter(eeg_filt, NOTCH_FREQ, FS)
-        epochs = windowed_epochs(eeg_filt, FS, EPOCH_SEC, EPOCH_OVERLAP)
-        feats = [extract_stat_features(ep, FS) for ep in epochs]
-        feats = np.array(feats)
-        feats = (feats - mu) / (sigma + 1e-8)  # z-score using training stats
-        print_progress(f"Visualizing band power over time for all channels in {file_label}...")
-        plot_band_power_over_time_all_channels(epochs, FS, filename=f'band_power_over_time_all_{file_label}.png', file_label=file_label)
-        print_progress(f"Classifying windows for {file_label} (progress bar)...")
-        preds = classify_windows_progress(clf, scaler, feats)
-        n_windows = len(preds)
-        stim_labels = get_stimulus_labels(n_windows, FS, EPOCH_SEC)
-        print_progress(f"Plotting average emotion per stimulus period for {file_label}...")
-        plot_avg_emotion_per_stimulus_over_time(preds, stim_labels, EPOCH_SEC, filename=f'avg_emotion_per_stimulus_{file_label}.png', file_label=file_label)
-        print_progress(f"Plotting pattern-based emotion labels for {file_label}...")
-        plot_eeg_pattern_based_labels(epochs, FS, filename=f'pattern_based_emotion_labels_{file_label}.png', file_label=file_label)
-        # --- PDF Report: add new per-file plots and text blocks ---
-    pdf = matplotlib.backends.backend_pdf.PdfPages(f"EEG_Analysis_report.pdf")
-    for test_file in test_files:
-        file_label = os.path.basename(test_file)
-        # Band power all channels
-        img = plt.imread(f'band_power_over_time_all_{file_label}.png')
-        fig = plt.figure(figsize=(14, 8))
-        plt.imshow(img)
-        plt.axis('off')
-        plt.title(f'Band Power Over Time (All Channels)\nFile: {file_label}')
-        pdf.savefig(fig)
-        plt.close(fig)
-        add_text_block_to_pdf(pdf, f"Band power over time for all electrodes. File visualized: {file_label}")
-        # Avg emotion per stimulus
-        img = plt.imread(f'avg_emotion_per_stimulus_{file_label}.png')
-        fig = plt.figure(figsize=(14, 6))
-        plt.imshow(img)
-        plt.axis('off')
-        plt.title(f'Average Emotion Proportion per Stimulus Period\nFile: {file_label}')
-        pdf.savefig(fig)
-        plt.close(fig)
-        add_text_block_to_pdf(pdf, f"Average emotion proportion per stimulus period, one bar per window of the stimulus. File visualized: {file_label}")
-        # Pattern-based labels
-        img = plt.imread(f'pattern_based_emotion_labels_{file_label}.png')
-        fig = plt.figure(figsize=(14, 4))
-        plt.imshow(img)
-        plt.axis('off')
-        plt.title(f'Pattern-based Emotion Labels per Epoch\nFile: {file_label}')
-        pdf.savefig(fig)
-        plt.close(fig)
-        add_text_block_to_pdf(pdf, f"Pattern-based emotion labels using EEG band power rules and z-score thresholding. File visualized: {file_label}")
-    pdf.close()
+def plot_eeg_pattern_based_labels(epochs, fs, filename, file_label):
+    """
+    Generate a visualization based on EEG emotion patterns and thresholding.
+    - Excited: ↑ Beta (Fz, C3, Cz, C4), ↓ Alpha (PO7, Oz, PO8)
+    - Angry: ↑ Beta (C4, Fz)
+    - Sad: ↑ Alpha (PO8)
+    - Calm: ↑ Alpha (PO7)
+    Use z-score thresholding (e.g., >1 or <-1) for detection.
+    """
+    n_epochs, _, n_channels = epochs.shape
+    band_names = list(BANDS.keys())
+    # Compute band powers for all epochs/channels
+    band_powers = np.zeros((n_epochs, n_channels, len(band_names)))
+    for i in range(n_epochs):
+        for ch in range(n_channels):
+            for b, band in enumerate(BANDS.values()):
+                band_powers[i, ch, b] = compute_band_power(epochs[i, :, ch], fs, band)
+    # Z-score across epochs for each channel/band
+    mu = band_powers.mean(axis=0)
+    sigma = band_powers.std(axis=0) + 1e-8
+    z_band_powers = (band_powers - mu) / sigma
+    # Pattern-based label assignment
+    labels = []
+    for i in range(n_epochs):
+        # Excited: ↑ Beta (Fz, C3, Cz, C4), ↓ Alpha (PO7, Oz, PO8)
+        excited = (
+            (z_band_powers[i, CH_IDX['Fz'], band_names.index('beta')] > 1) and
+            (z_band_powers[i, CH_IDX['C3'], band_names.index('beta')] > 1) and
+            (z_band_powers[i, CH_IDX['Cz'], band_names.index('beta')] > 1) and
+            (z_band_powers[i, CH_IDX['C4'], band_names.index('beta')] > 1) and
+            (z_band_powers[i, CH_IDX['PO7'], band_names.index('alpha')] < -1) and
+            (z_band_powers[i, CH_IDX['Oz'], band_names.index('alpha')] < -1) and
+            (z_band_powers[i, CH_IDX['PO8'], band_names.index('alpha')] < -1)
+        )
+        # Angry: ↑ Beta (C4, Fz)
+        angry = (
+            (z_band_powers[i, CH_IDX['C4'], band_names.index('beta')] > 1) and
+            (z_band_powers[i, CH_IDX['Fz'], band_names.index('beta')] > 1)
+        )
+        # Sad: ↑ Alpha (PO8)
+        sad = (z_band_powers[i, CH_IDX['PO8'], band_names.index('alpha')] > 1)
+        # Calm: ↑ Alpha (PO7)
+        calm = (z_band_powers[i, CH_IDX['PO7'], band_names.index('alpha')] > 1)
+        if excited:
+            labels.append('excited')
+        elif angry:
+            labels.append('angry')
+        elif sad:
+            labels.append('sad')
+        elif calm:
+            labels.append('calm')
+        else:
+            labels.append('neutral')
+    # Plot
+    fig, ax = plt.subplots(figsize=(16, 3))
+    color_map = {'excited': '#FFB347', 'angry': '#FF6961', 'sad': '#779ECB', 'calm': '#77DD77', 'neutral': '#CCCCCC'}
+    x = np.arange(n_epochs)
+    y = np.zeros(n_epochs)
+    for emo in ['excited', 'angry', 'sad', 'calm', 'neutral']:
+        idx = [i for i, l in enumerate(labels) if l == emo]
+        ax.scatter(x[idx], y[idx], color=color_map[emo], label=emo, s=60)
+    ax.set_yticks([])
+    ax.set_xlabel('Epoch (Time)')
+    ax.set_title(f'Pattern-based Emotion Labels per Epoch\nFile: {file_label}')
+    ax.legend(loc='upper right')
+    # Add side text explanation
+    text = (
+        "Pattern-based emotion labels are assigned using EEG band power rules and z-score thresholding.\n"
+        "Rules:\n"
+        "- Excited: High beta (Fz, C3, Cz, C4), low alpha (PO7, Oz, PO8)\n"
+        "- Angry: High beta (C4, Fz)\n"
+        "- Sad: High alpha (PO8)\n"
+        "- Calm: High alpha (PO7)\n"
+        "- Neutral: None of the above\n\n"
+        "Z-score threshold: >1 (high), <-1 (low) relative to mean band power per channel.\n"
+        "This plot shows the detected emotion label for each epoch based on these rules."
+    )
+    add_side_text_to_plot(ax, text)
+    plt.tight_layout(rect=[0, 0, 0.8, 1])
+    plt.savefig(filename)
+    plt.close(fig)
+    return labels
+
+# --- Utility: Timestamped PDF report name ---
+def timestamped_report_filename(base):
+    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    return f"{base}_{ts}.pdf"
+
+"""
+# Output files and their meaning:
+- filtering_stats.csv: Table of mean and standard deviation for each EEG channel before and after filtering. Quantifies the effect of bandpass and notch filtering.
+- feature_stats.csv: Table of statistical properties (mean, std, min, max) for each extracted feature (per channel, per band, per statistic). Used to summarize the feature extraction process and for quality control.
+- loso_reports.csv: Leave-One-Subject-Out (LOSO) cross-validation results. Contains precision, recall, F1-score, and support for each emotion class and fold. Used to assess classifier performance.
+- band_power_over_time_all_<file_label>_<timestamp>.png: Visualization of band power (delta, theta, alpha, beta, gamma) over time for all channels in a given file.
+- avg_emotion_per_stimulus_<file_label>_<timestamp>.png: Bar chart of average emotion proportions per stimulus period for a given file.
+- pattern_based_emotion_labels_<file_label>_<timestamp>.png: Visualization of pattern-based emotion labels per epoch for a given file.
+- emotion_proportion_over_time_<file_label>_<timestamp>.png: Area plot of emotion proportions over time (window/epoch-based) for a given file.
+- avg_emotion_per_stimulus_over_time_<file_label>_<timestamp>.png: Bar plot summarizing emotion detection statistics by stimulus period for a given file.
+- EEG_Analysis_report_<timestamp>.pdf: Comprehensive PDF report with all plots, explanations, and statistics for all analyzed files.
+- EEG_Emotion_Visualizations.pdf: PDF containing all main emotion visualization figures for quick review.
+"""
