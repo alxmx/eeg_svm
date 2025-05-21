@@ -1,0 +1,1771 @@
+{
+  "results": [
+    {
+      "timestamp": 0.0,
+      "features": {
+        "theta_fz": 2.7715334752085825,
+        "alpha_po": 0.3763342536221739,
+        "faa": 0.7707499197958911,
+        "beta_frontal": 0.2406981120206194,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.47627088884439717,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 1.5,
+      "features": {
+        "theta_fz": 2.1402293735437423,
+        "alpha_po": 0.7445075064976493,
+        "faa": 0.11467400800696845,
+        "beta_frontal": 0.2229264096550254,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.42817036520176754,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 3.0,
+      "features": {
+        "theta_fz": 2.0010040647501306,
+        "alpha_po": 1.0188562248987258,
+        "faa": 0.7573041676632529,
+        "beta_frontal": 0.44082782817224997,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.4601600685579528,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 4.5,
+      "features": {
+        "theta_fz": 4.152101680067099,
+        "alpha_po": 1.559910057533984,
+        "faa": 0.8397618784442961,
+        "beta_frontal": 0.3432956171112849,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6328495409167404,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 6.0,
+      "features": {
+        "theta_fz": 4.760528140094977,
+        "alpha_po": 1.5988843800071575,
+        "faa": 0.927992885276435,
+        "beta_frontal": 0.5340506098784142,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.667154695562216,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 7.5,
+      "features": {
+        "theta_fz": 2.410960469353974,
+        "alpha_po": 0.9541751494344645,
+        "faa": 1.0994162757349004,
+        "beta_frontal": 0.3749073465736709,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5012327619665928,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 9.0,
+      "features": {
+        "theta_fz": 1.9304357515465453,
+        "alpha_po": 0.18458083902534742,
+        "faa": -0.10574267745488336,
+        "beta_frontal": 0.3560626461180345,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.366838509850995,
+      "behavioral_state": "Unfocused"
+    },
+    {
+      "timestamp": 10.5,
+      "features": {
+        "theta_fz": 1.0346724288787563,
+        "alpha_po": 0.25155618037015337,
+        "faa": -0.12671193356686344,
+        "beta_frontal": 0.32636815445191825,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.3202244622798456,
+      "behavioral_state": "Unfocused"
+    },
+    {
+      "timestamp": 12.0,
+      "features": {
+        "theta_fz": 1.1953936591257492,
+        "alpha_po": 0.27562940182409174,
+        "faa": -0.03771613089873968,
+        "beta_frontal": 0.34798178928868523,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.3335917058561156,
+      "behavioral_state": "Unfocused"
+    },
+    {
+      "timestamp": 13.5,
+      "features": {
+        "theta_fz": 3.929588024980897,
+        "alpha_po": 0.1932106630655031,
+        "faa": 0.19596846464504097,
+        "beta_frontal": 0.3285376027483545,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5051529986809794,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 15.0,
+      "features": {
+        "theta_fz": 1.606436759802137,
+        "alpha_po": 0.3623152198830021,
+        "faa": 0.5457621384679285,
+        "beta_frontal": 0.3165101920266667,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.39027983318060094,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 16.5,
+      "features": {
+        "theta_fz": 2.1581455462065935,
+        "alpha_po": 0.38673001480616653,
+        "faa": 0.35314898503330916,
+        "beta_frontal": 0.25343114389246973,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.41795694828586655,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 18.0,
+      "features": {
+        "theta_fz": 2.6076344824983266,
+        "alpha_po": 0.4823857919558914,
+        "faa": 0.8804991595380474,
+        "beta_frontal": 0.3175578708485489,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.47526301734927195,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 19.5,
+      "features": {
+        "theta_fz": 3.1606500862194893,
+        "alpha_po": 1.238600924713985,
+        "faa": 0.5865985180429134,
+        "beta_frontal": 0.41421908871428204,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5386725040738537,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 21.0,
+      "features": {
+        "theta_fz": 4.235273233753976,
+        "alpha_po": 1.1286670594285781,
+        "faa": 0.5155620183963942,
+        "beta_frontal": 0.4253044287336431,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5939458944161448,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 22.5,
+      "features": {
+        "theta_fz": 2.947770926983775,
+        "alpha_po": 1.0883911833842848,
+        "faa": 0.9491615923530154,
+        "beta_frontal": 0.38715195556971765,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.535141975893332,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 24.0,
+      "features": {
+        "theta_fz": 2.2786977739156264,
+        "alpha_po": 0.6943585503561646,
+        "faa": 1.395324129400237,
+        "beta_frontal": 0.2769078366886027,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.49519833047926115,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 25.5,
+      "features": {
+        "theta_fz": 3.943286089459399,
+        "alpha_po": 0.8145677988615404,
+        "faa": 2.7394989316790785,
+        "beta_frontal": 0.34066869822058904,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6651350872305153,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 27.0,
+      "features": {
+        "theta_fz": 1.3684232237833711,
+        "alpha_po": 0.8974527130078626,
+        "faa": 2.6162272204006483,
+        "beta_frontal": 0.2690145648730837,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5123380557143019,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 28.5,
+      "features": {
+        "theta_fz": 1.4407913653682878,
+        "alpha_po": 0.8434804570172688,
+        "faa": 2.9014910016203213,
+        "beta_frontal": 0.2711159537775068,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5276464643321341,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 30.0,
+      "features": {
+        "theta_fz": 3.8561285711214914,
+        "alpha_po": 1.204783036414592,
+        "faa": 2.298754686340872,
+        "beta_frontal": 0.3294271622013763,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6627480810850904,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 31.5,
+      "features": {
+        "theta_fz": 4.198185465823676,
+        "alpha_po": 0.9415375499762229,
+        "faa": 3.375217702721668,
+        "beta_frontal": 0.3351403947021854,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7129394316748542,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 33.0,
+      "features": {
+        "theta_fz": 7.0688352980755536,
+        "alpha_po": 1.946837492915923,
+        "faa": 3.5623216253996386,
+        "beta_frontal": 0.49191079406946364,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.8690512306124617,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 34.5,
+      "features": {
+        "theta_fz": 3.119795684229859,
+        "alpha_po": 1.8858577328934931,
+        "faa": 2.884250035948256,
+        "beta_frontal": 0.4216864440290675,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6824405549253646,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 36.0,
+      "features": {
+        "theta_fz": 2.057605953574044,
+        "alpha_po": 1.6127346643514098,
+        "faa": 0.46472972848423255,
+        "beta_frontal": 0.5293328434904653,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.48278959516695974,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 37.5,
+      "features": {
+        "theta_fz": 3.182084078403578,
+        "alpha_po": 0.952628521090451,
+        "faa": 0.7697031739243483,
+        "beta_frontal": 0.6397024517121213,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5228998224306405,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 39.0,
+      "features": {
+        "theta_fz": 2.868585277740622,
+        "alpha_po": 0.8584470798569016,
+        "faa": 1.769541756814377,
+        "beta_frontal": 0.48129007960586784,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5531664826059333,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 40.5,
+      "features": {
+        "theta_fz": 3.01647644388546,
+        "alpha_po": 1.0745133139994463,
+        "faa": 0.27406586563633667,
+        "beta_frontal": 0.5718596164209654,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.49794542909779616,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 42.0,
+      "features": {
+        "theta_fz": 1.9884554332658986,
+        "alpha_po": 1.2695386138709832,
+        "faa": 1.9334725050589245,
+        "beta_frontal": 0.42849134179495946,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5341764526841146,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 43.5,
+      "features": {
+        "theta_fz": 2.0997582834016386,
+        "alpha_po": 2.061245440371357,
+        "faa": 2.9548556506042187,
+        "beta_frontal": 0.4143262978714816,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6385492740954388,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 45.0,
+      "features": {
+        "theta_fz": 3.10873595678798,
+        "alpha_po": 0.997415449206757,
+        "faa": 2.47477243624185,
+        "beta_frontal": 0.3813590494646381,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.614031028727413,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 46.5,
+      "features": {
+        "theta_fz": 2.4250191377587234,
+        "alpha_po": 0.6479949409644254,
+        "faa": 1.879633925924167,
+        "beta_frontal": 0.32843524798238205,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5237109563642235,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 48.0,
+      "features": {
+        "theta_fz": 1.4213108096246234,
+        "alpha_po": 1.2187383618999954,
+        "faa": 2.606117049295605,
+        "beta_frontal": 0.34575841560902915,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5322979498290104,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 49.5,
+      "features": {
+        "theta_fz": 1.6282061001203076,
+        "alpha_po": 0.7649788897256504,
+        "faa": 2.0167162880993637,
+        "beta_frontal": 0.3328506661773721,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.48793032147700544,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 51.0,
+      "features": {
+        "theta_fz": 1.2986527648908999,
+        "alpha_po": 1.224899317440932,
+        "faa": 2.892563027631117,
+        "beta_frontal": 0.3156215372311311,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5404259134519267,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 52.5,
+      "features": {
+        "theta_fz": 1.7099753294284825,
+        "alpha_po": 0.8556848106346678,
+        "faa": 2.141411705646166,
+        "beta_frontal": 0.3881890027976757,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5028672250021927,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 54.0,
+      "features": {
+        "theta_fz": 2.0681381533597434,
+        "alpha_po": 0.8289574607034286,
+        "faa": 2.9213452470253727,
+        "beta_frontal": 0.3669171066084493,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.563039107191698,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 55.5,
+      "features": {
+        "theta_fz": 2.3053588754992376,
+        "alpha_po": 1.0385442041325652,
+        "faa": 3.6253120094828293,
+        "beta_frontal": 0.34921114988850027,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6244914737755678,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 57.0,
+      "features": {
+        "theta_fz": 4.442887152672902,
+        "alpha_po": 0.8261747318777308,
+        "faa": 2.4459311140017843,
+        "beta_frontal": 0.37698910479018427,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6791576345135255,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 58.5,
+      "features": {
+        "theta_fz": 2.9278324889757465,
+        "alpha_po": 0.9643523533432303,
+        "faa": 2.458822852903345,
+        "beta_frontal": 0.472168220579861,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5972417695544353,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 60.0,
+      "features": {
+        "theta_fz": 1.5128199817646284,
+        "alpha_po": 0.8727362172527721,
+        "faa": 3.164864935955193,
+        "beta_frontal": 0.4433119164782249,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5406265501369267,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 61.5,
+      "features": {
+        "theta_fz": 2.245417200200662,
+        "alpha_po": 3.221197725092339,
+        "faa": 5.005960012047627,
+        "beta_frontal": 0.4785196585101937,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7851724538841708,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 63.0,
+      "features": {
+        "theta_fz": 3.086867974905695,
+        "alpha_po": 1.6897920786370664,
+        "faa": 3.5954168104188176,
+        "beta_frontal": 0.4720490247457398,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6989790742002834,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 64.5,
+      "features": {
+        "theta_fz": 2.8481234069240906,
+        "alpha_po": 1.3051146956026416,
+        "faa": 4.060000233040111,
+        "beta_frontal": 0.33663282733750816,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6899348311712477,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 66.0,
+      "features": {
+        "theta_fz": 2.5388751612255094,
+        "alpha_po": 1.937568724647531,
+        "faa": 2.6800070822008184,
+        "beta_frontal": 0.37612522914458874,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6453573664620101,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 67.5,
+      "features": {
+        "theta_fz": 1.7892855421750262,
+        "alpha_po": 2.250574068924073,
+        "faa": 2.853012740137166,
+        "beta_frontal": 0.30395324609887403,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.630642577479932,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 69.0,
+      "features": {
+        "theta_fz": 1.370155392401174,
+        "alpha_po": 3.4221291798556117,
+        "faa": 3.9921476272534875,
+        "beta_frontal": 0.4592127830997847,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7165919320835048,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 70.5,
+      "features": {
+        "theta_fz": 2.796319944425978,
+        "alpha_po": 2.893393518371434,
+        "faa": 3.663991248421077,
+        "beta_frontal": 0.36932559154133066,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7502278347364021,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 72.0,
+      "features": {
+        "theta_fz": 2.9503200559815186,
+        "alpha_po": 1.3343777234476648,
+        "faa": 2.9197926808381833,
+        "beta_frontal": 0.43107642769134497,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6434733262446376,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 73.5,
+      "features": {
+        "theta_fz": 4.527801835946036,
+        "alpha_po": 4.538255667234783,
+        "faa": 4.228051746654803,
+        "beta_frontal": 0.35389955763573155,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.8868578574307243,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 75.0,
+      "features": {
+        "theta_fz": 8.107757702623541,
+        "alpha_po": 5.323662009745952,
+        "faa": 4.428720675321436,
+        "beta_frontal": 0.3985096525439182,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9602209344477741,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 76.5,
+      "features": {
+        "theta_fz": 1.495475136633727,
+        "alpha_po": 1.2863107664645812,
+        "faa": 3.264590245681892,
+        "beta_frontal": 0.35850890378045913,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5731190247519777,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 78.0,
+      "features": {
+        "theta_fz": 2.585405378303928,
+        "alpha_po": 0.6521305408915242,
+        "faa": 2.52047592476602,
+        "beta_frontal": 0.38890376511539976,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5634421086043758,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 79.5,
+      "features": {
+        "theta_fz": 4.74153312646293,
+        "alpha_po": 4.548103260501966,
+        "faa": 4.582394189901688,
+        "beta_frontal": 0.41543399855696767,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.8981259286549815,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 81.0,
+      "features": {
+        "theta_fz": 4.011484875957313,
+        "alpha_po": 12.629033501716988,
+        "faa": 5.333373720226977,
+        "beta_frontal": 0.44398574023079834,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9846354184434217,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 82.5,
+      "features": {
+        "theta_fz": 4.328577441811798,
+        "alpha_po": 29.359297514926375,
+        "faa": 5.360695729485386,
+        "beta_frontal": 0.5036475117549949,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9997793166007319,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 84.0,
+      "features": {
+        "theta_fz": 3.244904754999381,
+        "alpha_po": 5.356889918986703,
+        "faa": 2.985621906341528,
+        "beta_frontal": 0.3690832490100302,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.8445146491773974,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 85.5,
+      "features": {
+        "theta_fz": 1.4539062825049391,
+        "alpha_po": 6.634178986190849,
+        "faa": 3.9566228969949506,
+        "beta_frontal": 0.2996355260569161,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.854258653255614,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 87.0,
+      "features": {
+        "theta_fz": 3.0297022550060837,
+        "alpha_po": 10.474880750395718,
+        "faa": 3.9450449507399865,
+        "beta_frontal": 0.4206135631853251,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.956977749559627,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 88.5,
+      "features": {
+        "theta_fz": 2.1996305732355528,
+        "alpha_po": 13.652632240800147,
+        "faa": 4.6477019483836655,
+        "beta_frontal": 0.4691648557314765,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9785895119750427,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 90.0,
+      "features": {
+        "theta_fz": 4.862092481795261,
+        "alpha_po": 8.29308982897463,
+        "faa": 5.135417773594847,
+        "beta_frontal": 0.3643013505219786,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9630746965829089,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 91.5,
+      "features": {
+        "theta_fz": 3.963668077448234,
+        "alpha_po": 2.9793333792974908,
+        "faa": 3.0558798487172414,
+        "beta_frontal": 0.20694382665630376,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7884962230217667,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 93.0,
+      "features": {
+        "theta_fz": 2.7542564062409496,
+        "alpha_po": 3.4989174758681516,
+        "faa": 3.259068329795851,
+        "beta_frontal": 0.202246916842978,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7658043960424569,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 94.5,
+      "features": {
+        "theta_fz": 2.0266172842995713,
+        "alpha_po": 2.9535512225358374,
+        "faa": 2.8979279220230487,
+        "beta_frontal": 0.24436540967164114,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6873959071927724,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 96.0,
+      "features": {
+        "theta_fz": 1.401193326571904,
+        "alpha_po": 2.668653240524041,
+        "faa": 2.616455790711073,
+        "beta_frontal": 0.14048402095979212,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6270729825823191,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 97.5,
+      "features": {
+        "theta_fz": 2.5951549598956873,
+        "alpha_po": 0.8858415019637481,
+        "faa": 2.440284138676756,
+        "beta_frontal": 0.18971939535956606,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.581722400688524,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 99.0,
+      "features": {
+        "theta_fz": 5.197135461669672,
+        "alpha_po": 3.6725091792374287,
+        "faa": 3.3001360448493555,
+        "beta_frontal": 0.397711039495479,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.8602997372667014,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 100.5,
+      "features": {
+        "theta_fz": 1.70429238362609,
+        "alpha_po": 4.222037077082661,
+        "faa": 3.440603938168496,
+        "beta_frontal": 0.4191932473261531,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7515365637926599,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 102.0,
+      "features": {
+        "theta_fz": 0.47988945357977436,
+        "alpha_po": 1.2489544383886002,
+        "faa": 2.7107906544870604,
+        "beta_frontal": 0.38753403878341247,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.4790719838360345,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 103.5,
+      "features": {
+        "theta_fz": 0.7229421316317701,
+        "alpha_po": 1.2636870054559188,
+        "faa": 2.3073957851170377,
+        "beta_frontal": 0.37062036589333847,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.47565511210921485,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 105.0,
+      "features": {
+        "theta_fz": 1.303484649251607,
+        "alpha_po": 3.542635096215105,
+        "faa": 4.597185489524582,
+        "beta_frontal": 0.31178325445675487,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7472878854650631,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 106.5,
+      "features": {
+        "theta_fz": 3.5280153393433773,
+        "alpha_po": 1.7331874460659678,
+        "faa": 3.301529016134765,
+        "beta_frontal": 0.28943188249352936,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7175197257702178,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 108.0,
+      "features": {
+        "theta_fz": 2.6286817690867417,
+        "alpha_po": 4.1864190528620115,
+        "faa": 2.627235461605154,
+        "beta_frontal": 0.36328690616757586,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7639987879478736,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 109.5,
+      "features": {
+        "theta_fz": 2.25661076699823,
+        "alpha_po": 1.2927134924615116,
+        "faa": 3.265196019776133,
+        "beta_frontal": 0.34290760547446864,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6198553080134271,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 111.0,
+      "features": {
+        "theta_fz": 2.5851700962975666,
+        "alpha_po": 2.026557353331206,
+        "faa": 3.41107998697432,
+        "beta_frontal": 0.5416273223685405,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6800287136116526,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 112.5,
+      "features": {
+        "theta_fz": 3.459341850115669,
+        "alpha_po": 9.082850817585902,
+        "faa": 3.497621640486699,
+        "beta_frontal": 0.4046378914041075,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9412753870810535,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 114.0,
+      "features": {
+        "theta_fz": 2.15475132053738,
+        "alpha_po": 0.8408830065702041,
+        "faa": 2.3039388657149504,
+        "beta_frontal": 0.15567897207428416,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5464517879461085,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 115.5,
+      "features": {
+        "theta_fz": 6.488491843134462,
+        "alpha_po": 4.583950588350142,
+        "faa": 4.560691810730883,
+        "beta_frontal": 0.40021125129517293,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9321514497610017,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 117.0,
+      "features": {
+        "theta_fz": 13.253764286805135,
+        "alpha_po": 24.62540266106276,
+        "faa": 5.543478738042614,
+        "beta_frontal": 0.4831080113058917,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9999256030552824,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 118.5,
+      "features": {
+        "theta_fz": 5.823264614678863,
+        "alpha_po": 18.953875223295153,
+        "faa": 5.430350637763759,
+        "beta_frontal": 0.48079477339427107,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.997991258019583,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 120.0,
+      "features": {
+        "theta_fz": 3.9826518579953967,
+        "alpha_po": 27.272862074386843,
+        "faa": 4.7307030965649375,
+        "beta_frontal": 0.3941107291006373,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9995477858962529,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 121.5,
+      "features": {
+        "theta_fz": 1.4995096571368727,
+        "alpha_po": 12.659473382667562,
+        "faa": 4.271887342095468,
+        "beta_frontal": 0.2461402219393718,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9663398908613711,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 123.0,
+      "features": {
+        "theta_fz": 1.989343653503971,
+        "alpha_po": 7.798103611737019,
+        "faa": 4.490791944787353,
+        "beta_frontal": 0.21317925367881294,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9099515352258423,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 124.5,
+      "features": {
+        "theta_fz": 2.066335533871514,
+        "alpha_po": 4.273495425172232,
+        "faa": 3.353807676620657,
+        "beta_frontal": 0.23648711912183307,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7721068744213576,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 126.0,
+      "features": {
+        "theta_fz": 1.3685825407487566,
+        "alpha_po": 5.447381438879612,
+        "faa": 3.4196255916995204,
+        "beta_frontal": 0.46585777143991014,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.788855003624097,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 127.5,
+      "features": {
+        "theta_fz": 1.3230896750600125,
+        "alpha_po": 1.4381780015697712,
+        "faa": 3.449421024140446,
+        "beta_frontal": 0.3693084451807008,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5804947842795823,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 129.0,
+      "features": {
+        "theta_fz": 1.3427391406649498,
+        "alpha_po": 1.5188314736963373,
+        "faa": 3.1111876663744473,
+        "beta_frontal": 0.47043775255692966,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5663721084395714,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 130.5,
+      "features": {
+        "theta_fz": 1.0421826580417766,
+        "alpha_po": 2.197652241067297,
+        "faa": 2.449807970954077,
+        "beta_frontal": 0.33633168921374973,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5620461847451915,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 132.0,
+      "features": {
+        "theta_fz": 1.9397412672430596,
+        "alpha_po": 2.547076882424547,
+        "faa": 3.659327682587796,
+        "beta_frontal": 0.4757836992977549,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6861546129738009,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 133.5,
+      "features": {
+        "theta_fz": 1.29759555193469,
+        "alpha_po": 2.1922681337888914,
+        "faa": 3.441837838761457,
+        "beta_frontal": 0.33628040221079275,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6248982300450315,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 135.0,
+      "features": {
+        "theta_fz": 2.8569153824780034,
+        "alpha_po": 1.4942201484859712,
+        "faa": 3.136611014963662,
+        "beta_frontal": 0.278813278691201,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6622381322912753,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 136.5,
+      "features": {
+        "theta_fz": 2.193654222267088,
+        "alpha_po": 0.599625932687652,
+        "faa": 1.8153567857164055,
+        "beta_frontal": 0.3052056511385328,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.503902557802181,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 138.0,
+      "features": {
+        "theta_fz": 2.224103024785914,
+        "alpha_po": 0.8789009805583515,
+        "faa": 2.651708566280284,
+        "beta_frontal": 0.24968293289086718,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5667590639722683,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 139.5,
+      "features": {
+        "theta_fz": 2.739467425668321,
+        "alpha_po": 0.5476622190266244,
+        "faa": 1.9526205073795864,
+        "beta_frontal": 0.30919418565667206,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.541386934674655,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 141.0,
+      "features": {
+        "theta_fz": 2.4738261537550055,
+        "alpha_po": 0.5353976893272615,
+        "faa": 1.6182727090077555,
+        "beta_frontal": 0.3348525633413803,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5064327995556739,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 142.5,
+      "features": {
+        "theta_fz": 3.0258493062845653,
+        "alpha_po": 0.9530755210896145,
+        "faa": 1.4415863544629555,
+        "beta_frontal": 0.3940157640387631,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5557537101212336,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 144.0,
+      "features": {
+        "theta_fz": 1.9903103929239871,
+        "alpha_po": 0.9399109645512571,
+        "faa": 1.9931369999497965,
+        "beta_frontal": 0.4299022158562935,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5166681731112395,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 145.5,
+      "features": {
+        "theta_fz": 2.170204869602401,
+        "alpha_po": 0.5331952362370261,
+        "faa": 2.6130862398661034,
+        "beta_frontal": 0.4058190138212316,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5343444379604597,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 147.0,
+      "features": {
+        "theta_fz": 1.8858118613736605,
+        "alpha_po": 0.9162014053165998,
+        "faa": 2.6822549836058047,
+        "beta_frontal": 0.3911696741448572,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5444520416451071,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 148.5,
+      "features": {
+        "theta_fz": 3.0423422444634163,
+        "alpha_po": 0.784048680422874,
+        "faa": 2.7001399427882817,
+        "beta_frontal": 0.40737870016194117,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6071907613847507,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 150.0,
+      "features": {
+        "theta_fz": 2.5580556119246447,
+        "alpha_po": 0.9496599519309901,
+        "faa": 1.9766838045397765,
+        "beta_frontal": 0.3381136994466423,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5551617048493023,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 151.5,
+      "features": {
+        "theta_fz": 2.856053160741715,
+        "alpha_po": 0.6618076017525125,
+        "faa": 2.6159724719976674,
+        "beta_frontal": 0.44090739698238296,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5833458114737531,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 153.0,
+      "features": {
+        "theta_fz": 1.5886990580880156,
+        "alpha_po": 1.105571912062267,
+        "faa": 1.638472940605438,
+        "beta_frontal": 0.3845300000602629,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.4858994475145306,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 154.5,
+      "features": {
+        "theta_fz": 2.3616226576471746,
+        "alpha_po": 0.7137674359285906,
+        "faa": 2.931157797473452,
+        "beta_frontal": 0.36112130390912284,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5746651756700981,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 156.0,
+      "features": {
+        "theta_fz": 2.0205939569148996,
+        "alpha_po": 0.7482657074440612,
+        "faa": 2.248777899333944,
+        "beta_frontal": 0.3872178341362272,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5209596652625651,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 157.5,
+      "features": {
+        "theta_fz": 0.8915256049710336,
+        "alpha_po": 0.9087568183127709,
+        "faa": 2.3152811826571282,
+        "beta_frontal": 0.3226042188717569,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.46623551709495525,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 159.0,
+      "features": {
+        "theta_fz": 1.8204597468121808,
+        "alpha_po": 0.668637854064599,
+        "faa": 0.7883015552500987,
+        "beta_frontal": 0.19035705685759186,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.43816347701876507,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 160.5,
+      "features": {
+        "theta_fz": 1.8590434734761996,
+        "alpha_po": 0.4166812801189516,
+        "faa": 2.154636187083059,
+        "beta_frontal": 0.12517257917995342,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.4952707757711812,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 162.0,
+      "features": {
+        "theta_fz": 1.8525378854153571,
+        "alpha_po": 1.628964217012666,
+        "faa": 3.1988334540236316,
+        "beta_frontal": 0.22150495270880732,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6170194810027868,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 163.5,
+      "features": {
+        "theta_fz": 0.6554875256025846,
+        "alpha_po": 1.1395097488813084,
+        "faa": 3.805160499483993,
+        "beta_frontal": 0.22088617948053293,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5440476413437636,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 165.0,
+      "features": {
+        "theta_fz": 3.858738345141809,
+        "alpha_po": 3.6539787360727205,
+        "faa": 5.121858055042719,
+        "beta_frontal": 0.33266255491317326,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.864438118769742,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 166.5,
+      "features": {
+        "theta_fz": 3.526695913988356,
+        "alpha_po": 10.182696404152296,
+        "faa": 4.687037774294366,
+        "beta_frontal": 0.25998472142945134,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9653019654621456,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 168.0,
+      "features": {
+        "theta_fz": 1.3473910178118733,
+        "alpha_po": 8.45441142748831,
+        "faa": 4.287686510887804,
+        "beta_frontal": 0.1737015711303068,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9073696163889734,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 169.5,
+      "features": {
+        "theta_fz": 0.7976822839378738,
+        "alpha_po": 9.375552220723925,
+        "faa": 2.7895349906309717,
+        "beta_frontal": 0.2899167158566098,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.8867261758948713,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 171.0,
+      "features": {
+        "theta_fz": 1.8689353306898686,
+        "alpha_po": 5.508552239016949,
+        "faa": 1.5840691379607792,
+        "beta_frontal": 0.3898167770623222,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7507681329349531,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 172.5,
+      "features": {
+        "theta_fz": 7.911095688519247,
+        "alpha_po": 6.181106842453237,
+        "faa": 2.0498553003222164,
+        "beta_frontal": 0.5907983565240066,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9450285894920867,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 174.0,
+      "features": {
+        "theta_fz": 3.6961464314603854,
+        "alpha_po": 5.814192098333982,
+        "faa": 1.7401302559194054,
+        "beta_frontal": 0.4626377650981858,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.8397292598264349,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 175.5,
+      "features": {
+        "theta_fz": 1.9678451727932134,
+        "alpha_po": 2.6072128612461554,
+        "faa": 0.8710623162233078,
+        "beta_frontal": 0.3105113604106661,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5674366362935721,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 177.0,
+      "features": {
+        "theta_fz": 1.621766794998298,
+        "alpha_po": 2.520726614937923,
+        "faa": 0.8457674556019127,
+        "beta_frontal": 0.29055812712107215,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5402112506568719,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 178.5,
+      "features": {
+        "theta_fz": 2.1906821525554596,
+        "alpha_po": 5.11591640139952,
+        "faa": 2.3026035335615536,
+        "beta_frontal": 0.5212263892617653,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7701195527362664,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 180.0,
+      "features": {
+        "theta_fz": 2.4827911537818808,
+        "alpha_po": 1.9899284300668014,
+        "faa": 0.8788880809049426,
+        "beta_frontal": 0.4006894234087972,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5581985372197648,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 181.5,
+      "features": {
+        "theta_fz": 3.2929794579111515,
+        "alpha_po": 6.557614456988627,
+        "faa": 1.9026764961054052,
+        "beta_frontal": 0.3513596652623916,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.856986094778113,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 183.0,
+      "features": {
+        "theta_fz": 2.607956246851906,
+        "alpha_po": 10.850216306280554,
+        "faa": 2.142001350329674,
+        "beta_frontal": 0.5884768444923795,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9373017587811725,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 184.5,
+      "features": {
+        "theta_fz": 3.3190827509449305,
+        "alpha_po": 12.684854461536382,
+        "faa": 2.353901818782559,
+        "beta_frontal": 0.5375960291500682,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.967426023649348,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 186.0,
+      "features": {
+        "theta_fz": 4.328637677589728,
+        "alpha_po": 4.623166408144135,
+        "faa": 0.849735625982313,
+        "beta_frontal": 0.38486324023617907,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7941572007742664,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 187.5,
+      "features": {
+        "theta_fz": 2.342066207511305,
+        "alpha_po": 4.433347185033053,
+        "faa": 1.115706117492139,
+        "beta_frontal": 0.3367413151365602,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.7040134348669969,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 189.0,
+      "features": {
+        "theta_fz": 1.3522564910859576,
+        "alpha_po": 1.6429087460847662,
+        "faa": 1.0307855782646755,
+        "beta_frontal": 0.40263217213887836,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.4736627987476726,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 190.5,
+      "features": {
+        "theta_fz": 2.706795257615354,
+        "alpha_po": 1.5952073391816517,
+        "faa": 1.0222135682678952,
+        "beta_frontal": 0.38206147007675995,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5554297720052315,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 192.0,
+      "features": {
+        "theta_fz": 3.5146614841112482,
+        "alpha_po": 3.257068574792638,
+        "faa": 0.527238831644884,
+        "beta_frontal": 0.6431921977143275,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6686092135167102,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 193.5,
+      "features": {
+        "theta_fz": 3.080616121575732,
+        "alpha_po": 14.341237040907263,
+        "faa": 1.5550112002053473,
+        "beta_frontal": 0.7344245918577857,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.9722479685823694,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 195.0,
+      "features": {
+        "theta_fz": 1.4824299369761094,
+        "alpha_po": 3.61632606366952,
+        "faa": 0.8333110414232135,
+        "beta_frontal": 0.521244892804054,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.5898062476871325,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 196.5,
+      "features": {
+        "theta_fz": 1.3044131302587314,
+        "alpha_po": 0.8187088899559504,
+        "faa": 0.5320812615756303,
+        "beta_frontal": 0.45929320404144525,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.3937211232403982,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 198.0,
+      "features": {
+        "theta_fz": 2.4096658534363695,
+        "alpha_po": 1.181072225577132,
+        "faa": 0.2761912965702461,
+        "beta_frontal": 0.6100519593212721,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.4654090907711178,
+      "behavioral_state": "Neutral"
+    },
+    {
+      "timestamp": 199.5,
+      "features": {
+        "theta_fz": 2.8433726644348694,
+        "alpha_po": 1.7797724019063739,
+        "faa": 0.03443887453976424,
+        "beta_frontal": 0.4949176885932529,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.522094698717547,
+      "behavioral_state": "Focused"
+    },
+    {
+      "timestamp": 201.0,
+      "features": {
+        "theta_fz": 4.527079223235754,
+        "alpha_po": 1.4430855548765966,
+        "faa": 0.5347619817276668,
+        "beta_frontal": 0.4501460183584836,
+        "eda_norm": 0
+      },
+      "eda_value": null,
+      "mi_score": 0.6299428593956637,
+      "behavioral_state": "Focused"
+    }
+  ],
+  "metadata": {
+    "file_path": "data/toClasify\\UnicornRecorder_12_05_2025_12_45_530.csv",
+    "eda_path": null,
+    "total_duration_sec": 204.448,
+    "analyzed_duration_sec": 204.0,
+    "windows_count": 135,
+    "valid": true,
+    "sampling_rate": 250,
+    "window_size_sec": 3,
+    "overlap_pct": 50.0,
+    "has_eda": false
+  }
+}

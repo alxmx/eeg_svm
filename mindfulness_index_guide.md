@@ -20,7 +20,8 @@ The Mindfulness Index (MI) Calculator processes EEG data to quantify mindfulness
 The mindfulness index is calculated using the following formula:
 
 ```
-MI = (0.25 * Theta_Fz) + (0.25 * Alpha_PO) + (0.20 * FAA) - (0.15 * Beta_Frontal) - (0.15 * EDA_norm)
+MI_raw = (0.25 * Theta_Fz) + (0.25 * Alpha_PO) + (0.20 * FAA) - (0.15 * Beta_Frontal) - (0.15 * EDA_norm)
+MI = 1 / (1 + exp(-MI_raw + 1))  # Normalized to 0-1 range
 ```
 
 Where:
@@ -29,6 +30,9 @@ Where:
 - **FAA**: Frontal Alpha Asymmetry = log(alpha at C4) - log(alpha at C3)
 - **Beta_Frontal**: 13-30 Hz power averaged across Fz, C3, and C4
 - **EDA_norm**: Normalized electrodermal activity (if available)
+- **exp**: Exponential function
+
+The normalization step ensures that the final MI value always falls within the 0-1 range, regardless of the magnitude of the raw features. This makes the MI value more interpretable and suitable for comparison across different recordings and subjects.
 
 ## How to Use
 
@@ -129,6 +133,51 @@ Planned enhancements:
 - Adjustable preprocessing parameters
 - Integration with visualization dashboards
 - Support for additional EEG features
+- Advanced feature normalization techniques
+
+## MI Normalization
+
+The Mindfulness Index calculation includes a normalization step that maps the raw weighted sum of features to the 0-1 range using a sigmoid-like function:
+
+```
+MI_normalized = 1 / (1 + exp(-MI_raw + 1))
+```
+
+This normalization has several important properties:
+
+1. **Bounded Output**: The normalized MI is always between 0 and 1, regardless of input magnitude
+2. **Smooth Mapping**: The function provides a smooth transition across the full range of values
+3. **Centered at 0.5**: A raw MI of 1.0 maps to a normalized MI of 0.5
+4. **Thresholds**: 
+   - Neutral threshold (0.37) corresponds to a raw MI value of approximately 0.49
+   - Focused threshold (0.5) corresponds to a raw MI value of approximately 1.00
+
+## Cognitive States Interpretation
+
+The Mindfulness Index thresholds define three distinct cognitive/attentional states:
+
+### Focused State (MI ≥ 0.5)
+
+- **Neural Signature**: Elevated frontal theta power, enhanced posterior alpha, and positive frontal alpha asymmetry combined with reduced frontal beta activity
+- **Cognitive Characteristics**: Sustained attention, present-moment awareness, reduced mind-wandering, enhanced sensory processing
+- **Experiential Qualities**: Clear perception, mental calm with alertness, reduced reactivity to distractions
+- **Associated Activities**: Meditation, deep concentration tasks, flow states, mindful awareness practices
+
+### Neutral State (0.37 ≤ MI < 0.5)
+
+- **Neural Signature**: Moderate levels of theta and alpha power, balanced frontal activity
+- **Cognitive Characteristics**: Normal attentional function, shifting between internal and external awareness, moderate task engagement
+- **Experiential Qualities**: Ordinary waking consciousness, neither highly focused nor significantly distracted
+- **Associated Activities**: Routine tasks, relaxed but alert states, general problem-solving
+
+### Unfocused State (MI < 0.37)
+
+- **Neural Signature**: Decreased frontal theta and posterior alpha, often with increased beta activity and/or negative frontal alpha asymmetry
+- **Cognitive Characteristics**: Increased distractibility, mind-wandering, difficulty maintaining attention, potentially elevated arousal
+- **Experiential Qualities**: Scattered thoughts, difficulty with concentration, mental chatter
+- **Associated Activities**: Distracted states, rumination, worry, mental fatigue
+   
+For historical comparison, you can use the `normalize_mi_value()` function to convert raw MI values from older analyses to the normalized scale.
 
 ---
 

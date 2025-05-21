@@ -1,0 +1,11 @@
+Effect of MI Normalization:
+     Set  MI (Old)  MI (New) State (Old) State (New)
+0  Set 1     0.350  0.342990   Unfocused   Unfocused
+1  Set 2     6.395  0.995614     Focused     Focused
+2  Set 3    13.025  0.999994     Focused     Focused
+3  Set 4    24.800  1.000000     Focused     Focused
+Plot saved to results\mi_normalization_comparison.png
+Normalization function plot saved to results\mi_normalization_function.png
+
+Raw MI Value for Neutral Threshold (0.4): 0.5945
+Raw MI Value for Focused Threshold (0.6): 1.4055

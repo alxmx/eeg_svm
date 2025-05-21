@@ -1,0 +1,55 @@
+======== Comprehensive MI Normalization Tests ========
+
+=== Testing MI Normalization with Different Feature Magnitudes ===
+                Set  MI (Raw)  MI (Normalized) State (Raw) State (Normalized)
+0        Low Values     0.210         0.312169   Unfocused          Unfocused
+1     Normal Values     0.875         0.468791     Focused            Neutral
+2       High Values     2.700         0.845535     Focused            Focused
+3  Very High Values     8.050         0.999133     Focused            Focused
+4    Extreme Values    22.000         1.000000     Focused            Focused
+
+Warning: The following feature sets have different behavioral states:
+             Set  MI (Raw)  MI (Normalized) State (Raw) State (Normalized)
+1  Normal Values     0.875         0.468791     Focused            Neutral
+
+=== Testing MI Normalization with Different Weight Settings ===
+           Config  MI (Raw)  MI (Normalized)  MI (Manual Normalize)  Match
+0         Default      3.70         0.937027               0.937027   True
+1     Theta Focus      5.20         0.985226               0.985226   True
+2     Alpha Focus      4.30         0.964429               0.964429   True
+3  Equal Positive      5.31         0.986745               0.986745   True
+4  Negative Heavy      1.95         0.721115               0.721115   True
+
+Normalization is consistent between calculate_mi and normalize_mi_value functions.
+
+=== Testing Historical Data Conversion ===
+   timestamp  mi_raw  mi_normalized  state_old state_normalized
+0        0.0     0.2       0.310026  Unfocused        Unfocused
+1        1.5     0.5       0.377541    Neutral          Neutral
+2        3.0     1.0       0.500000    Focused          Focused
+3        4.5     2.5       0.817574    Focused          Focused
+4        6.0     5.0       0.982014    Focused          Focused
+5        7.5     7.5       0.998499    Focused          Focused
+6        9.0    10.0       0.999877    Focused          Focused
+
+Historical data state classification preserved after normalization.
+
+=== Visualizing Normalization Function ===
+Normalization function visualization saved to results\mi_normalization_detailed.png
+
+Raw MI Value for Neutral Threshold (0.37): 0.4678
+Raw MI Value for Focused Threshold (0.5): 1.0000
+
+=== Testing Edge Cases ===
+Zero (0.0): 0.2689414213699951
+Very Negative (-10.0): 1.670142184809518e-05
+Very Positive (100.0): 1.0
+Extremely Negative (-1000.0): 0.0
+Extremely Positive (1000.0): 1.0
+NaN (nan): nan
+
+This verifies that the normalization function handles extreme values appropriately.
+
+======== All Tests Completed ========
+MI normalization is working as expected and provides a consistent 0-1 range output.
+The original behavioral state classification is preserved with the normalized MI values.
