@@ -1,0 +1,45 @@
+Unity LSL Integration Instructions
+==================================
+
+This document describes how to connect Unity to the real-time Mindfulness Index (MI) LSL pipeline.
+
+1. **Unity Sends Labels to Python**
+   - Use LSL4Unity or similar LSL plugin.
+   - Create an LSL outlet stream:
+     - Name: (any)
+     - Type: `UnityMarkers`
+     - Format: float32 or string (recommended: float32, e.g., 0.8)
+   - When the user provides feedback or a label, push the value to this stream.
+
+2. **Unity Receives MI from Python**
+   - Create an LSL inlet stream:
+     - Name: `MI_Output`
+     - Type: `MI`
+     - Format: float32
+   - This stream provides the real-time MI value (0-1) for visualization or feedback.
+
+3. **LSL Stream Details**
+   - **Features (input to Python):**
+     - Type: `Features`
+     - Format: float32[] (order: theta_fz, alpha_po, faa, beta_frontal, eda_norm)
+   - **UnityMarkers (input to Python):**
+     - Type: `UnityMarkers`
+     - Format: float32 (label value)
+   - **MI_Output (output from Python):**
+     - Type: `MI`
+     - Format: float32 (MI value)
+
+4. **LabRecorder**
+   - To record all streams for offline analysis, use LabRecorder and select the above streams.
+
+5. **Typical Workflow**
+   - Start the Python script (`realtime_mi_lsl.py`).
+   - Start Unity and connect to the LSL streams as described above.
+   - Unity can send user feedback/labels and receive MI in real time.
+
+6. **Troubleshooting**
+   - Ensure all LSL streams are on the same network and visible.
+   - Use LSL tools (e.g., LSL Browser) to verify stream presence.
+   - If the Python script cannot find a stream, check that Unity is running and the stream is active.
+
+For more details, see the LSL4Unity documentation or the Python script comments.

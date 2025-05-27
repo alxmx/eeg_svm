@@ -1,0 +1,32 @@
+# EEG Mindfulness Index Pipeline Environment
+#
+# This file describes the dependencies needed to run realtime_mi_lsl.py and related scripts.
+# It is recommended to use conda for environment management, but you can adapt this for pip if needed.
+#
+# Usage:
+#   conda env create -f environment.yml
+#   conda activate eeg_mi_env
+#
+# If you do not have conda, see: https://docs.conda.io/en/latest/miniconda.html
+
+name: eeg_mi_env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9  # Python version used for development; 3.8 or 3.10 may also work
+  - numpy       # Numerical computations
+  - pandas      # Data manipulation and CSV handling
+  - scikit-learn  # Machine learning models (SGDRegressor, SVR, SVC, StandardScaler)
+  - matplotlib  # Visualization for live MI feedback
+  - pip         # To install pip-only packages
+  - pip:
+      - pylsl   # Lab Streaming Layer for real-time data streams
+      - joblib  # Model serialization (saving/loading models)
+
+# Optional: If you use Jupyter for data exploration, add:
+#   - jupyterlab
+#
+# After installation, run:
+#   conda activate eeg_mi_env
+#   python realtime_mi_lsl.py

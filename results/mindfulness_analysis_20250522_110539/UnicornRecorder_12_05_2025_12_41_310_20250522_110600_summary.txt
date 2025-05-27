@@ -1,0 +1,35 @@
+=== Mindfulness Index (MI) Analysis Summary ===
+
+File: UnicornRecorder_12_05_2025_12_41_310
+Analysis Date: 2025-05-22 11:06:01
+
+EDA file used: data/eda_data\opensignals_0007808C0700_2025-04-30_16-32-15_V.txt
+
+- Window Size: 3 seconds
+- Window Overlap: 50.0%
+- Frequency Bands: Theta (4, 7.99), Alpha (8, 12.99), Beta (13, 30)
+- MI Weights: {'theta_fz': 0.25, 'alpha_po': 0.25, 'faa': 0.2, 'beta_frontal': -0.15, 'eda_norm': -0.25}
+- State Thresholds: Focused >= 0.5, Neutral >= 0.37, Unfocused < 0.37
+
+Rationale for Data and Parameters
+-------------------------------
+Mindfulness Index (MI) is computed as a weighted sum of neurophysiological features, followed by normalization:
+
+    MI_raw = (w1 * Theta_Fz) + (w2 * Alpha_PO) + (w3 * FAA) - (w4 * Beta_Frontal) - (w5 * EDA_norm)
+    MI = 1 / (1 + exp(-MI_raw + 1))  # Normalized to 0-1 range
+
+- Theta_Fz (frontal theta): Higher values reflect focused attention and meditation.
+- Alpha_PO (posterior alpha): Higher values reflect relaxed alertness.
+- FAA (frontal alpha asymmetry): Reflects emotional valence and approach/withdrawal.
+- Beta_Frontal: Higher values reflect active thinking and less mindfulness (negative weight).
+- EDA_norm: Higher EDA (arousal) is negatively correlated with mindfulness (negative weight).
+
+EDA data is normalized (z-score or min-max) and aligned to EEG windows. If EDA is missing or invalid, it is set to zero for that window.
+
+Behavioral state thresholds:
+- Focused: MI >= 0.5
+- Neutral: 0.37 <= MI < 0.5
+- Unfocused: MI < 0.37
+
+These thresholds are empirically chosen to reflect meaningful distinctions in mindfulness levels.
+

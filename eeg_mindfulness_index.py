@@ -1,12 +1,17 @@
 """
 EEG Mindfulness Index Pipeline
 
-This script implements a mindfulness index calculation pipeline for EEG data, including:
-- Data loading and preprocessing
+This project provides a comprehensive pipeline for analyzing EEG (and optional EDA) data to quantify mindfulness using the Mindfulness Index (MI). It supports both discrete state classification and continuous regression, and includes robust preprocessing, feature extraction, visualization, and reporting.
+
+Main Functionalities:
+- Data loading and preprocessing for EEG and EDA (CSV/OpenSignals)
 - Signal filtering (bandpass)
 - Feature extraction: Frontal Theta, Posterior Alpha, Frontal Alpha Asymmetry, Frontal Beta, EDA
-- Mindfulness Index (MI) calculation
-- Behavioral state classification
+- Mindfulness Index (MI) calculation (continuous 0-1 value)
+- Behavioral state classification (Focused, Neutral, Unfocused) using MI thresholds
+- SVM-based classification (discrete states) and regression (continuous MI)
+- Visualization: MI time series, feature contributions, state distributions, and model performance
+- Batch processing and comprehensive reporting (CSV, JSON, PDF)
 
 Electrode Key:
     Frontal: Fz (ch1)
@@ -28,9 +33,19 @@ Mindfulness Index Formula:
     w2 = 0.25 (Posterior Alpha)
     w3 = 0.20 (Frontal Alpha Asymmetry)
     w4 = 0.15 (Frontal Beta)
-    w5 = 0.15 (EDA)
+    w5 = 0.10 (EDA)
     
     The formula includes a normalization step to ensure MI values stay within 0-1 range.
+
+Classification Methods Supported:
+- Threshold-based: MI is binned into Focused, Neutral, Unfocused using fixed thresholds.
+- SVM Classification: Predicts discrete states from features using synthetic MI-based labels.
+- SVM Regression: Predicts continuous MI value from features for nuanced feedback.
+
+Outputs:
+- Per-window MI and state
+- Model predictions and metrics
+- Plots and comprehensive PDF/text/CSV reports
 """
 import os
 import numpy as np
@@ -40,6 +55,7 @@ import matplotlib.pyplot as plt
 import json
 import glob
 from datetime import datetime
+from fpdf import FPDF
 
 # --- Parameters ---
 FS = 250  # Sampling frequency (Hz)
@@ -51,8 +67,8 @@ BANDPASS = (4, 30)  # Hz, for general filtering
 # Define the folder where EDA data files are stored
 # Change this path to modify where EDA files are searched
 EDA_DATA_FOLDER = "data/eda_data"  # <-- CHANGE THIS PATH AS NEEDED
-THETA_BAND = (4, 7)  # Hz
-ALPHA_BAND = (8, 12)  # Hz
+THETA_BAND = (4, 7.99)  # Hz
+ALPHA_BAND = (8, 12.99)  # Hz
 BETA_BAND = (13, 30)  # Hz
 WINDOW_SEC = 3  # Window size for features (seconds)
 OVERLAP = 0.5  # 50% overlap between windows
@@ -64,8 +80,8 @@ MI_WEIGHTS = {
     'theta_fz': 0.25,
     'alpha_po': 0.25,
     'faa': 0.20,
-    'beta_frontal': 0.15,  # Beta activity is correlated with mental concentration and active thinking
-    'eda_norm': 0.25
+    'beta_frontal': -0.15,  # Beta activity is correlated with mental concentration and active thinking
+    'eda_norm': -0.25  # EDA is negatively correlated with mindfulness
 }
 
 # Behavioral state thresholds
@@ -459,7 +475,7 @@ def process_eeg_file(eeg_filepath, eda_filepath=None):
             'timestamp': timestamp,
             'features': features,
             'eda_value': float(eda_value) if eda_value is not None else None,
-            'mi_score': float(mi),
+            'mi_score': round(float(mi), 2),
             'behavioral_state': behavioral_state
         }
         results.append(result)
@@ -633,7 +649,7 @@ def plot_feature_contributions(results, output_filepath, file_name=None):
     # Return the weighted features for use in other functions
     return weighted_features
 
-def plot_behavioral_state_summary(results, output_filepath):
+def plot_behavioral_state_summary(results, output_filepath, file_name=None):
     """Plot summary of behavioral states"""
     states = [r['behavioral_state'] for r in results]
     unique_states = ['Focused', 'Neutral', 'Unfocused']
@@ -661,19 +677,33 @@ def plot_behavioral_state_summary(results, output_filepath):
             autopct='%1.1f%%', 
             colors=colors,
             explode=[0.05] * len(unique_states))
-    plt.title('Distribution of Behavioral States')
+    
+    # Add file name to the title if provided
+    if file_name:
+        plt.title(f'Distribution of Behavioral States - {file_name}')
+    else:
+        plt.title('Distribution of Behavioral States')
     
     # Create bar chart
     plt.subplot(1, 2, 2)
     plt.bar(unique_states, [state_pcts[state] for state in unique_states], color=colors)
     plt.xlabel('Behavioral State')
     plt.ylabel('Percentage (%)')
-    plt.title('Percentage of Time in Each State')
+    
+    # Add file name to the title if provided
+    if file_name:
+        plt.title(f'Percentage of Time in Each State - {file_name}')
+    else:
+        plt.title('Percentage of Time in Each State')
     
     # Add exact percentages on top of bars
     for i, state in enumerate(unique_states):
         plt.text(i, state_pcts[state] + 1, f"{state_pcts[state]:.1f}%", 
                 ha='center', va='bottom')
+    
+    # Add data source information
+    plt.figtext(0.02, 0.02, f"Source: {os.path.basename(output_filepath).split('_')[0]}", 
+                fontsize=8, color='gray')
     
     plt.tight_layout()
     plt.savefig(output_filepath)
@@ -721,20 +751,19 @@ def generate_report(results_data, file_label, output_dir='results'):
     for r in results:
         row = {
             'timestamp': r['timestamp'],
-            'mi_score': r['mi_score'],
+            'mi_score': round(r['mi_score'], 2),
             'behavioral_state': r['behavioral_state']
         }
         for feature, value in r['features'].items():
-            row[feature] = value
+            row[feature] = round(value, 2)  
         if r['eda_value'] is not None:
-            row['eda_norm'] = r['eda_value']
+            row['eda_norm'] = round(r['eda_value'], 2)  
         csv_data.append(row)
     
     csv_filepath = os.path.join(output_dir, f"{base_filename}_mindfulness_data.csv")
     pd.DataFrame(csv_data).to_csv(csv_filepath, index=False)
     print(f"CSV data saved to {csv_filepath}")
-    
-    # Save simplified CSV with just MI index
+      # Save simplified CSV with just MI index
     simplified_csv_data = []
     for r in results:
         simplified_csv_data.append({
@@ -745,7 +774,8 @@ def generate_report(results_data, file_label, output_dir='results'):
     simplified_csv_filepath = os.path.join(output_dir, f"{base_filename}_mi_only.csv")
     pd.DataFrame(simplified_csv_data).to_csv(simplified_csv_filepath, index=False)
     print(f"Simplified MI data saved to {simplified_csv_filepath}")
-      # Create plots
+    
+    # Create plots
     plot_mi_filepath = os.path.join(output_dir, f"{base_filename}_mi_timeseries.png")
     plot_mi_timeseries(results, plot_mi_filepath, file_label)
     
@@ -753,7 +783,7 @@ def generate_report(results_data, file_label, output_dir='results'):
     plot_feature_contributions(results, feature_plot_filepath, file_label)
     
     state_plot_filepath = os.path.join(output_dir, f"{base_filename}_behavioral_states.png")
-    plot_behavioral_state_summary(results, state_plot_filepath)
+    plot_behavioral_state_summary(results, state_plot_filepath, file_label)
     
     # Generate summary text file
     summary_filepath = os.path.join(output_dir, f"{base_filename}_summary.txt")
@@ -762,46 +792,46 @@ def generate_report(results_data, file_label, output_dir='results'):
         f.write("=== Mindfulness Index (MI) Analysis Summary ===\n\n")
         f.write(f"File: {file_label}\n")
         f.write(f"Analysis Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        
-        # Parameters        f.write("Parameters:\n")
+        # Add EDA file used
+        eda_file = metadata.get('eda_path', None)
+        f.write(f"EDA file used: {eda_file if eda_file else 'None'}\n\n")
+        # Parameters
         f.write(f"- Window Size: {WINDOW_SEC} seconds\n")
         f.write(f"- Window Overlap: {OVERLAP * 100}%\n")
         f.write(f"- Frequency Bands: Theta {THETA_BAND}, Alpha {ALPHA_BAND}, Beta {BETA_BAND}\n")
         f.write(f"- MI Weights: {MI_WEIGHTS}\n")
-        f.write(f"- State Thresholds: Focused >= {THRESHOLDS['focused']}, " 
+        f.write(f"- State Thresholds: Focused >= {THRESHOLDS['focused']}, " \
                 f"Neutral >= {THRESHOLDS['neutral']}, Unfocused < {THRESHOLDS['neutral']}\n\n")
+
+        # --- Rationale Section ---
+        f.write("Rationale for Data and Parameters\n")
+        f.write("-------------------------------\n")
+        f.write("Mindfulness Index (MI) is computed as a weighted sum of neurophysiological features, followed by normalization:\n")
+        f.write("\n")
+        f.write("    MI_raw = (w1 * Theta_Fz) + (w2 * Alpha_PO) + (w3 * FAA) - (w4 * Beta_Frontal) - (w5 * EDA_norm)\n")
+        f.write("    MI = 1 / (1 + exp(-MI_raw + 1))  # Normalized to 0-1 range\n\n")
+        f.write("- Theta_Fz (frontal theta): Higher values reflect focused attention and meditation.\n")
+        f.write("- Alpha_PO (posterior alpha): Higher values reflect relaxed alertness.\n")
+        f.write("- FAA (frontal alpha asymmetry): Reflects emotional valence and approach/withdrawal.\n")
+        f.write("- Beta_Frontal: Higher values reflect active thinking and less mindfulness (negative weight).\n")
+        f.write("- EDA_norm: Higher EDA (arousal) is negatively correlated with mindfulness (negative weight).\n\n")
+        f.write("EDA data is normalized (z-score or min-max) and aligned to EEG windows. If EDA is missing or invalid, it is set to zero for that window.\n\n")
+        f.write("Behavioral state thresholds:\n")
+        f.write(f"- Focused: MI >= {THRESHOLDS['focused']}\n")
+        f.write(f"- Neutral: {THRESHOLDS['neutral']} <= MI < {THRESHOLDS['focused']}\n")
+        f.write(f"- Unfocused: MI < {THRESHOLDS['neutral']}\n\n")
+        f.write("These thresholds are empirically chosen to reflect meaningful distinctions in mindfulness levels.\n\n")
         
-        # File duration information
-        if metadata:
-            f.write("File Information:\n")
-            f.write(f"- Total Duration: {metadata.get('total_duration_sec', 0):.2f} seconds ({metadata.get('total_duration_sec', 0)/60:.2f} minutes)\n")
-            f.write(f"- Analyzed Duration: {metadata.get('analyzed_duration_sec', 0):.2f} seconds\n")
-            f.write(f"- EDA Data Available: {'Yes' if metadata.get('has_eda', False) else 'No'}\n\n")
-        
-        # Results summary
-        states = [r['behavioral_state'] for r in results]
-        mi_values = [r['mi_score'] for r in results]
-        
-        f.write("Results Summary:\n")
-        f.write(f"- Total Windows Analyzed: {len(results)}\n")
-        f.write(f"- Average MI Score: {np.mean(mi_values):.4f}\n")
-        f.write(f"- MI Score Range: {np.min(mi_values):.4f} to {np.max(mi_values):.4f}\n\n")
-        
-        f.write("Behavioral States:\n")
-        for state in ['Focused', 'Neutral', 'Unfocused']:
-            count = states.count(state)
-            percentage = (count / len(states)) * 100
-            f.write(f"- {state}: {count} windows ({percentage:.1f}%)\n")
-          f.write("\nOutput Files:\n")
-        f.write(f"- JSON Data: {json_filepath}\n")
-        f.write(f"- CSV Data: {csv_filepath}\n")
-        f.write(f"- Simplified MI Data: {simplified_csv_filepath}\n")
-        f.write(f"- MI Plot: {plot_mi_filepath}\n")
-        f.write(f"- Feature Plot: {feature_plot_filepath}\n")
-        f.write(f"- State Plot: {state_plot_filepath}\n")
-    
     print(f"Summary report saved to {summary_filepath}")
     
+    # After summary report is saved, generate PDF report
+    summary_text = open(summary_filepath).read()
+    plot_paths = [plot_mi_filepath, feature_plot_filepath, state_plot_filepath]
+    table_csv_paths = [csv_filepath, simplified_csv_filepath]
+    output_pdf_path = os.path.join(output_dir, f"{base_filename}_report.pdf")
+    generate_pdf_report(summary_text, plot_paths, table_csv_paths, output_pdf_path)
+    
+    # Add PDF path to return dict
     return {
         'json': json_filepath,
         'csv': csv_filepath,
@@ -809,372 +839,274 @@ def generate_report(results_data, file_label, output_dir='results'):
         'mi_plot': plot_mi_filepath,
         'feature_plot': feature_plot_filepath,
         'state_plot': state_plot_filepath,
-        'summary': summary_filepath
+        'summary': summary_filepath,
+        'report_pdf': output_pdf_path
     }
 
-def generate_comprehensive_report(results_data_list, output_dir='results'):
-    """
-    Generate a comprehensive report that combines all the data and visualizations from multiple EEG files.
-    
-    Args:
-        results_data_list: List of dictionaries containing results data and file information
-        output_dir: Base directory for saving the report
-    
-    Returns:
-        Dictionary with paths to generated report files
-    """
-    # Create timestamped folder for this report run
+def generate_pdf_report(summary_text, plot_paths, table_csv_paths, output_pdf_path, title="EEG Mindfulness Index Report"):
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, title, ln=True, align='C')
+    pdf.ln(10)
+
+    # Add summary text
+    pdf.set_font("Arial", '', 12)
+    for line in summary_text.split('\n'):
+        pdf.multi_cell(0, 8, line)
+    pdf.ln(5)
+
+    # Add plots
+    for plot_path in plot_paths:
+        if os.path.exists(plot_path):
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 14)
+            pdf.cell(0, 10, os.path.basename(plot_path), ln=True, align='C')
+            pdf.image(plot_path, x=10, w=pdf.w - 20)
+            pdf.ln(5)
+
+    # Add tables (as CSVs)
+    for csv_path in table_csv_paths:
+        if os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 14)
+            pdf.cell(0, 10, os.path.basename(csv_path), ln=True, align='C')
+            pdf.set_font("Arial", '', 8)
+            col_width = pdf.w / (len(df.columns) + 1)
+            for col in df.columns:
+                pdf.cell(col_width, 8, str(col), border=1)
+            pdf.ln()
+            for _, row in df.iterrows():
+                for item in row:
+                    pdf.cell(col_width, 8, str(item), border=1)
+                pdf.ln()
+            pdf.ln(5)
+
+    pdf.output(output_pdf_path)
+    print(f"PDF report saved to {output_pdf_path}")
+
+# --- Comprehensive Report Generation ---
+def generate_comprehensive_report(all_results, output_dir):
+    """Generate a comprehensive report combining all per-file results, summaries, plots, and tables."""
+    import pandas as pd
+    from fpdf import FPDF
+    import os
+    from datetime import datetime
+
+    # Prepare output paths
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    report_dir = os.path.join(output_dir, f"comprehensive_report_{timestamp}")
-    os.makedirs(report_dir, exist_ok=True)
-    
-    # Count total files processed
-    total_files = len(results_data_list)
-    if total_files == 0:
-        print("No data to generate report from.")
-        return {}
-    
-    # Collect summary statistics across all files
-    all_mi_values = []
+    base_filename = f"comprehensive_mindfulness_report_{timestamp}"
+    markdown_report_path = os.path.join(output_dir, f"{base_filename}.md")
+    pdf_report_path = os.path.join(output_dir, f"{base_filename}.pdf")
+    merged_csv_path = os.path.join(output_dir, f"{base_filename}_all_mi_data.csv")
+
+    # Aggregate summaries and plots
+    summary_texts = []
+    all_csvs = []
+    all_plots = []
+    all_tables = []
+    for entry in all_results:
+        report = entry.get('file_report', {})
+        eda_file = entry.get('eda_file', None)
+        # Add summary text
+        summary_path = report.get('summary')
+        if summary_path and os.path.exists(summary_path):
+            with open(summary_path, 'r') as f:
+                # Prepend EDA file info to each file's summary
+                summary_texts.append(f"# {entry['file_label']}\nEDA file used: {eda_file if eda_file else 'None'}\n" + f.read() + "\n\n")
+        # Add CSVs for merging
+        csv_path = report.get('csv')
+        if csv_path and os.path.exists(csv_path):
+            all_csvs.append(csv_path)
+            all_tables.append(csv_path)
+        # Add simplified CSVs as tables
+        simp_csv = report.get('simplified_csv')
+        if simp_csv and os.path.exists(simp_csv):
+            all_tables.append(simp_csv)
+        # Add plots
+        for plot_key in ['mi_plot', 'feature_plot', 'state_plot']:
+            plot_path = report.get(plot_key)
+            if plot_path and os.path.exists(plot_path):
+                all_plots.append(plot_path)
+
+    # Merge all MI CSVs
+    if all_csvs:
+        df_list = [pd.read_csv(csv) for csv in all_csvs]
+        merged_df = pd.concat(df_list, ignore_index=True)
+        merged_df.to_csv(merged_csv_path, index=False)
+        all_tables.insert(0, merged_csv_path)
+
+    # Combine all summary text
+    combined_summary = "\n---\n".join(summary_texts)
+    with open(markdown_report_path, 'w') as f:
+        f.write(f"# Comprehensive EEG Mindfulness Index Report\n\n")
+        f.write(combined_summary)
+        f.write(f"\n---\n")
+        f.write(f"## Merged MI Data Table: {os.path.basename(merged_csv_path)}\n")
+
+    # Generate comprehensive PDF report
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, "Comprehensive EEG Mindfulness Index Report", ln=True, align='C')
+    pdf.ln(10)
+    pdf.set_font("Arial", '', 12)
+    for line in combined_summary.split('\n'):
+        pdf.multi_cell(0, 8, line)
+    pdf.ln(5)
+    # Add merged table
+    if os.path.exists(merged_csv_path):
+        df = pd.read_csv(merged_csv_path)
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 14)
+        pdf.cell(0, 10, os.path.basename(merged_csv_path), ln=True, align='C')
+        pdf.set_font("Arial", '', 8)
+        col_width = pdf.w / (len(df.columns) + 1)
+        for col in df.columns:
+            pdf.cell(col_width, 8, str(col), border=1)
+        pdf.ln()
+        for _, row in df.iterrows():
+            for item in row:
+                pdf.cell(col_width, 8, str(item), border=1)
+            pdf.ln()
+        pdf.ln(5)
+    # Add all plots
+    for plot_path in all_plots:
+        if os.path.exists(plot_path):
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 14)
+            pdf.cell(0, 10, os.path.basename(plot_path), ln=True, align='C')
+            pdf.image(plot_path, x=10, w=pdf.w - 20)
+            pdf.ln(5)
+    # Add all tables (as CSVs)
+    for csv_path in all_tables:
+        if os.path.exists(csv_path) and csv_path != merged_csv_path:
+            df = pd.read_csv(csv_path)
+            pdf.add_page()
+            pdf.set_font("Arial", 'B', 14)
+            pdf.cell(0, 10, os.path.basename(csv_path), ln=True, align='C')
+            pdf.set_font("Arial", '', 8)
+            col_width = pdf.w / (len(df.columns) + 1)
+            for col in df.columns:
+                pdf.cell(col_width, 8, str(col), border=1)
+            pdf.ln()
+            for _, row in df.iterrows():
+                for item in row:
+                    pdf.cell(col_width, 8, str(item), border=1)
+                pdf.ln()
+            pdf.ln(5)
+    pdf.output(pdf_report_path)
+    print(f"Comprehensive PDF report saved to {pdf_report_path}")
+    return {
+        'markdown_report': markdown_report_path,
+        'pdf_report': pdf_report_path,
+        'merged_csv': merged_csv_path
+    }
+
+# --- Comprehensive Report Generation ---
+def generate_comprehensive_report(all_results, output_dir):
+    """Generate a comprehensive report across all processed files."""
+    import pandas as pd
+    from datetime import datetime
+    import os
+
+    # Prepare summary text
+    summary_lines = ["=== Comprehensive Mindfulness Index (MI) Analysis Summary ===\n"]
+    summary_lines.append(f"Report Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    summary_lines.append(f"Number of files analyzed: {len(all_results)}\n\n")
+
+    # Aggregate MI and state data
+    all_mi = []
     all_states = []
-    file_durations = []
-    has_eda_count = 0
-    file_summary = []
-    
-    # Create a new figure for combined MI plot
-    plt.figure(figsize=(14, 8))
-    
-    # Different markers for different files
-    markers = ['o', 's', '^', 'd', 'p', '*', 'x', '+']
-    
-    # Extract data from all files
-    for i, file_data in enumerate(results_data_list):
-        results_data = file_data['results_data']
-        file_label = file_data['file_label']
-        
-        # Extract results and metadata
+    per_file_stats = []
+    for entry in all_results:
+        file_label = entry['file_label']
+        results_data = entry['results_data']
         if isinstance(results_data, dict) and 'results' in results_data:
             results = results_data['results']
-            metadata = results_data.get('metadata', {})
         else:
-            # For backward compatibility
             results = results_data
-            metadata = {}
-        
-        if len(results) == 0:
-            continue
-            
-        # Collect statistics
-        mi_values = [r['mi_score'] for r in results]
-        states = [r['behavioral_state'] for r in results]
-        all_mi_values.extend(mi_values)
+        mi_values = [r['mi_score'] for r in results] if results else []
+        states = [r['behavioral_state'] for r in results] if results else []
+        all_mi.extend(mi_values)
         all_states.extend(states)
-        
-        # Add to file summary
-        file_summary.append({
+        per_file_stats.append({
             'file': file_label,
-            'duration_sec': metadata.get('total_duration_sec', 0),
             'windows': len(results),
-            'avg_mi': np.mean(mi_values),
-            'min_mi': np.min(mi_values),
-            'max_mi': np.max(mi_values),
-            'focused_pct': states.count('Focused') / len(states) * 100,
-            'neutral_pct': states.count('Neutral') / len(states) * 100,
-            'unfocused_pct': states.count('Unfocused') / len(states) * 100,
-            'has_eda': metadata.get('has_eda', False)
+            'avg_mi': np.mean(mi_values) if mi_values else None,
+            'min_mi': np.min(mi_values) if mi_values else None,
+            'max_mi': np.max(mi_values) if mi_values else None,
+            'focused_pct': (states.count('Focused') / len(states) * 100) if states else 0,
+            'neutral_pct': (states.count('Neutral') / len(states) * 100) if states else 0,
+            'unfocused_pct': (states.count('Unfocused') / len(states) * 100) if states else 0
         })
-        
-        if metadata.get('has_eda', False):
-            has_eda_count += 1
-            
-        file_durations.append(metadata.get('total_duration_sec', 0))
-        
-        # Add to combined MI plot (using offset for each file to avoid overlap)
-        timestamps = [r['timestamp'] for r in results]
-        marker_style = markers[i % len(markers)]
-        plt.plot(timestamps, mi_values, 
-                 label=f"{file_label}", 
-                 alpha=0.7,
-                 marker=marker_style, 
-                 markersize=3, 
-                 markevery=max(1, len(timestamps)//20))
-    
-    # Finalize combined MI plot
-    plt.axhline(y=THRESHOLDS['focused'], color='g', linestyle='--', alpha=0.7, label='Focused Threshold')
-    plt.axhline(y=THRESHOLDS['neutral'], color='b', linestyle='--', alpha=0.7, label='Neutral Threshold')
-    plt.xlabel('Time (seconds)')
-    plt.ylabel('Mindfulness Index (MI)')
-    plt.title('Combined Mindfulness Index Across All Files')
-    plt.grid(True, alpha=0.3)
-    plt.legend(loc='best')
-    plt.tight_layout()
-    
-    combined_mi_path = os.path.join(report_dir, "combined_mi_plot.png")
-    plt.savefig(combined_mi_path)
-    plt.close()
-    
-    # Create state distribution plot across all files
-    state_counts = {
-        'Focused': all_states.count('Focused'),
-        'Neutral': all_states.count('Neutral'),
-        'Unfocused': all_states.count('Unfocused')
-    }
-    
-    plt.figure(figsize=(10, 6))
-    
-    # Pie chart of all states
-    plt.subplot(1, 2, 1)
-    labels = list(state_counts.keys())
-    sizes = list(state_counts.values())
-    colors = ['green', 'blue', 'red']
-    plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90, explode=[0.05, 0.05, 0.05])
-    plt.title('Overall Behavioral State Distribution')
-    
-    # Stacked bar chart by file
-    plt.subplot(1, 2, 2)
-    df = pd.DataFrame(file_summary)
-    if not df.empty:
-        df[['focused_pct', 'neutral_pct', 'unfocused_pct']].plot(
-            kind='bar', 
-            stacked=True, 
-            color=['green', 'blue', 'red'], 
-            ax=plt.gca()
-        )
-        plt.title('State Distribution by File')
-        plt.xlabel('File Index')
-        plt.ylabel('Percentage')
-        plt.xticks(rotation=45)
-    
-    plt.tight_layout()
-    state_dist_path = os.path.join(report_dir, "state_distribution.png")
-    plt.savefig(state_dist_path)
-    plt.close()
-    
-    # Create band power plot if we have data
-    if len(results_data_list) > 0 and len(results_data_list[0].get('results_data', {}).get('results', [])) > 0:
-        first_results = results_data_list[0]['results_data']['results']
-        if first_results and 'features' in first_results[0]:
-            # Create band power boxplot
-            features_data = {}
-            for feature in ['theta_fz', 'alpha_po', 'faa', 'beta_frontal']:
-                feature_values = []
-                for file_data in results_data_list:
-                    results = file_data['results_data'].get('results', [])
-                    for r in results:
-                        if feature in r['features']:
-                            feature_values.append(r['features'][feature])
-                if feature_values:
-                    features_data[feature] = feature_values
-            
-            # Plot feature distributions
-            plt.figure(figsize=(12, 8))
-            plt.boxplot([features_data[f] for f in features_data], labels=list(features_data.keys()))
-            plt.ylabel('Feature Value')
-            plt.title('Distribution of EEG Features Across All Files')
-            plt.grid(True, alpha=0.3)
-            
-            feature_dist_path = os.path.join(report_dir, "feature_distributions.png")
-            plt.savefig(feature_dist_path)
-            plt.close()
-    
-    # Generate summary file
-    summary_path = os.path.join(report_dir, "comprehensive_report.md")
-    with open(summary_path, 'w') as f:
-        f.write("# EEG Mindfulness Pipeline: Complete Workflow Report\n\n")
-        f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d')}\n")
-        f.write("**Project:** EEG Mindfulness Index Analysis\n\n")
 
-        f.write("## 1. Data Acquisition\n\n")
-        f.write("### EEG Data\n")
-        f.write("- **Hardware:** Unicorn EEG recording system\n")
-        f.write(f"- **Sampling Rate:** {FS} Hz\n")
-        f.write("- **Channel Configuration:** 8 channels (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8)\n")
-        f.write("- **File Format:** CSV files\n")
-        
-        f.write("\n### EDA Data\n")
-        f.write("- **Hardware:** OpenSignals BioSignalsPlux system\n")
-        f.write("- **File Format:** Tab-separated text files (.txt) with header information\n")
-        f.write(f"- **Location:** `{EDA_DATA_FOLDER}` directory\n")
-        f.write(f"- **Files with EDA data:** {has_eda_count} out of {total_files}\n\n")
-        
-        f.write("## 2. Signal Processing\n\n")
-        f.write("### Preprocessing Steps\n")
-        f.write(f"- **Bandpass Filtering:** {BANDPASS[0]}-{BANDPASS[1]} Hz\n")
-        f.write("- **Window Size:** 3 seconds\n")
-        f.write("- **Window Overlap:** 50%\n\n")
-        
-        f.write("### Frequency Bands\n")
-        f.write(f"- **Theta Band:** {THETA_BAND[0]}-{THETA_BAND[1]} Hz\n")
-        f.write(f"- **Alpha Band:** {ALPHA_BAND[0]}-{ALPHA_BAND[1]} Hz\n")
-        f.write(f"- **Beta Band:** {BETA_BAND[0]}-{BETA_BAND[1]} Hz\n\n")
-        
-        f.write("## 3. Feature Extraction\n\n")
-        f.write("The following features were extracted from each window of EEG data:\n\n")
-        f.write("1. **Frontal Theta Power (Fz):** Indicator of focused attention and meditation\n")
-        f.write("2. **Posterior Alpha (PO7/PO8):** Indicator of relaxed alertness\n")
-        f.write("3. **Frontal Alpha Asymmetry (FAA):** Related to emotional valence and approach/withdrawal tendencies\n")
-        f.write("4. **Frontal Beta (Fz/C3/C4):** Indicator of active thinking and alertness\n")
-        f.write("5. **Electrodermal Activity (EDA):** Indicator of autonomic arousal\n\n")
-        
-        # Include the feature distribution plot if it was created
-        if 'feature_dist_path' in locals():
-            f.write(f"![Feature Distributions](feature_distributions.png)\n\n")
-            f.write("*Figure 1: Distribution of EEG Features Across All Files*\n\n")
-        
-        f.write("## 4. Mindfulness Index Calculation\n\n")
-        f.write("### Formula\n")
-        f.write("The Mindfulness Index is calculated using the following formula:\n\n")
-        f.write("```\n")
-        f.write("MI_raw = (w1 * Theta_Fz) + (w2 * Alpha_PO) + (w3 * FAA) - (w4 * Beta_Frontal) - (w5 * EDA_norm)\n")
-        f.write("MI = 1 / (1 + exp(-MI_raw + 1))  # Normalized to 0-1 range\n")
-        f.write("```\n\n")
-        
-        f.write("### Weights\n")
-        f.write("The following weights were used:\n\n")
-        for feature, weight in MI_WEIGHTS.items():
-            f.write(f"- **{feature}:** {weight}\n")
-        f.write("\n")
-        
-        f.write("### Thresholds\n")
-        f.write("Behavioral states were classified based on the following thresholds:\n\n")
-        f.write(f"- **Focused:** MI ≥ {THRESHOLDS['focused']}\n")
-        f.write(f"- **Neutral:** {THRESHOLDS['neutral']} ≤ MI < {THRESHOLDS['focused']}\n")
-        f.write(f"- **Unfocused:** MI < {THRESHOLDS['neutral']}\n\n")
-        
-        f.write("## 5. Results and Analysis\n\n")
-        
-        f.write("### Overall Summary\n")
-        f.write(f"- **Total Files Processed:** {total_files}\n")
-        f.write(f"- **Total Windows Analyzed:** {len(all_mi_values)}\n")
-        f.write(f"- **Average MI Score:** {np.mean(all_mi_values):.4f}\n")
-        f.write(f"- **MI Score Range:** {np.min(all_mi_values):.4f} to {np.max(all_mi_values):.4f}\n")
-        f.write(f"- **Total Duration:** {sum(file_durations):.2f} seconds ({sum(file_durations)/60:.2f} minutes)\n\n")
-        
-        f.write("### Behavioral State Distribution\n")
-        f.write(f"- **Focused:** {state_counts['Focused']} windows ({state_counts['Focused']/len(all_states)*100:.1f}%)\n")
-        f.write(f"- **Neutral:** {state_counts['Neutral']} windows ({state_counts['Neutral']/len(all_states)*100:.1f}%)\n")
-        f.write(f"- **Unfocused:** {state_counts['Unfocused']} windows ({state_counts['Unfocused']/len(all_states)*100:.1f}%)\n\n")
-        
-        # Include the state distribution plot
-        f.write(f"![State Distribution](state_distribution.png)\n\n")
-        f.write("*Figure 2: Overall Behavioral State Distribution*\n\n")
-        
-        # Include the combined MI plot
-        f.write(f"![Combined MI Plot](combined_mi_plot.png)\n\n")
-        f.write("*Figure 3: Combined Mindfulness Index Across All Files*\n\n")
-        
-        f.write("### Individual File Results\n\n")
-        f.write("| File | Duration (s) | Windows | Avg MI | Min MI | Max MI | Focused (%) | Neutral (%) | Unfocused (%) | EDA |\n")
-        f.write("|------|-------------|---------|--------|--------|--------|-------------|-------------|--------------|-----|\n")
-        
-        for summary in file_summary:
-            f.write(f"| {summary['file']} | {summary['duration_sec']:.1f} | {summary['windows']} | {summary['avg_mi']:.3f} | ")
-            f.write(f"{summary['min_mi']:.3f} | {summary['max_mi']:.3f} | {summary['focused_pct']:.1f} | ")
-            f.write(f"{summary['neutral_pct']:.1f} | {summary['unfocused_pct']:.1f} | {'Yes' if summary['has_eda'] else 'No'} |\n")
-        
-        f.write("\n## 6. Interpretation\n\n")
-        f.write("### Mindfulness States\n\n")
-        f.write("1. **Focused (MI ≥ 0.5):**\n")
-        f.write("   - High mindfulness state\n") 
-        f.write("   - Concentrated attention\n")
-        f.write("   - Characterized by increased theta activity at Fz and alpha synchronization\n")
-        f.write("   - Associated with meditative states and deep focus\n\n")
-        
-        f.write("2. **Neutral (0.37 ≤ MI < 0.5):**\n")
-        f.write("   - Regular attentional state\n")
-        f.write("   - Balanced brain activity\n")
-        f.write("   - Normal waking consciousness\n")
-        f.write("   - Neither strongly focused nor distracted\n\n")
-        
-        f.write("3. **Unfocused (MI < 0.37):**\n")
-        f.write("   - Low mindfulness or distracted state\n")
-        f.write("   - Increased beta activity\n")
-        f.write("   - Decreased theta/alpha coherence\n")
-        f.write("   - Associated with mind wandering and distractibility\n\n")
-        
-        f.write("### Practical Applications\n\n")
-        f.write("The Mindfulness Index provides a quantitative measure that can be used for:\n\n")
-        f.write("1. **Neurofeedback Training:** Real-time feedback for achieving mindful states\n")
-        f.write("2. **Meditation Assessment:** Objective measurement of meditation quality\n")
-        f.write("3. **Cognitive State Monitoring:** Continuous assessment of attention\n")
-        f.write("4. **Research:** Comparing different meditation techniques\n\n")
-        
-        f.write("## 7. Conclusion\n\n")
-        
-        # Generate an overall conclusion based on the data
-        f.write("The EEG Mindfulness Index successfully integrates EEG ")
-        if has_eda_count > 0:
-            f.write("and EDA ")
-        f.write("data to provide a comprehensive measure of mindfulness. ")
-        
-        dominant_state = max(state_counts, key=state_counts.get)
-        dominant_pct = state_counts[dominant_state] / len(all_states) * 100
-        
-        f.write(f"Overall, the analyzed data shows a predominantly **{dominant_state}** state ({dominant_pct:.1f}%), ")
-        
-        if dominant_state == 'Focused':
-            f.write("indicating successful mindfulness practices or states of deep concentration. ")
-        elif dominant_state == 'Neutral':
-            f.write("indicating a balanced attentional state with moderate mindfulness. ")
-        else:
-            f.write("suggesting potential challenges in maintaining focus or mindfulness. ")
-        
-        avg_mi = np.mean(all_mi_values)
-        f.write(f"The average Mindfulness Index of {avg_mi:.3f} further supports this conclusion.\n\n")
-        
-        f.write("This comprehensive analysis demonstrates the utility of the Mindfulness Index as a tool for ")
-        f.write("quantifying cognitive states related to attention, focus, and mindfulness using neurophysiological data.")
-        
-    # Create a simplified HTML version for easy viewing
-    html_path = os.path.join(report_dir, "comprehensive_report.html")
-    try:
-        import markdown
-        with open(summary_path, 'r') as md_file:
-            md_content = md_file.read()
-            
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8">
-            <title>EEG Mindfulness Pipeline Report</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; margin: 20px; }}
-                h1 {{ color: #2c3e50; }}
-                h2 {{ color: #3498db; margin-top: 20px; }}
-                h3 {{ color: #2980b9; }}
-                img {{ max-width: 100%; height: auto; }}
-                table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
-                th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-                th {{ background-color: #f2f2f2; }}
-                code {{ background-color: #f8f8f8; padding: 2px 4px; }}
-                pre {{ background-color: #f8f8f8; padding: 10px; overflow-x: auto; }}
-            </style>
-        </head>
-        <body>
-            {markdown.markdown(md_content, extensions=['tables'])}
-        </body>
-        </html>
-        """
-        
-        with open(html_path, 'w') as html_file:
-            html_file.write(html_content)
-            
-        print(f"HTML report generated: {html_path}")
-    except ImportError:
-        print("markdown package not installed. HTML report not generated.")
-    except Exception as e:
-        print(f"Error generating HTML report: {e}")
-    
-    print(f"\nComprehensive report generated in: {report_dir}")
-    print(f"Main report file: {summary_path}")
-    
+    # Overall stats
+    summary_lines.append(f"Total windows analyzed: {len(all_mi)}\n")
+    if all_mi:
+        summary_lines.append(f"Average MI score (all files): {np.mean(all_mi):.4f}\n")
+        summary_lines.append(f"MI score range: {np.min(all_mi):.4f} to {np.max(all_mi):.4f}\n")
+    for state in ['Focused', 'Neutral', 'Unfocused']:
+        count = all_states.count(state)
+        pct = (count / len(all_states) * 100) if all_states else 0
+        summary_lines.append(f"- {state}: {count} windows ({pct:.1f}%)\n")
+    summary_lines.append("\nPer-file summary:\n")
+    for stats in per_file_stats:
+        summary_lines.append(
+            f"{stats['file']}: windows={stats['windows']}, avg_mi={stats['avg_mi']:.4f} "
+            f"(min={stats['min_mi']:.4f}, max={stats['max_mi']:.4f}), "
+            f"Focused={stats['focused_pct']:.1f}%, Neutral={stats['neutral_pct']:.1f}%, Unfocused={stats['unfocused_pct']:.1f}%\n"
+        )
+
+    # Save summary text
+    summary_text = ''.join(summary_lines)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    base_filename = f"comprehensive_report_{timestamp}"
+    summary_path = os.path.join(output_dir, f"{base_filename}_summary.txt")
+    with open(summary_path, 'w') as f:
+        f.write(summary_text)
+    print(f"Comprehensive summary saved to {summary_path}")
+
+    # Combine all simplified MI CSVs
+    combined_csv_path = os.path.join(output_dir, f"{base_filename}_mi_only_combined.csv")
+    combined_rows = []
+    for entry in all_results:
+        file_report = entry.get('file_report', {})
+        csv_path = file_report.get('simplified_csv')
+        if csv_path and os.path.exists(csv_path):
+            df = pd.read_csv(csv_path)
+            df['file'] = entry['file_label']
+            combined_rows.append(df)
+    if combined_rows:
+        combined_df = pd.concat(combined_rows, ignore_index=True)
+        combined_df.to_csv(combined_csv_path, index=False)
+        print(f"Combined MI CSV saved to {combined_csv_path}")
+    else:
+        combined_csv_path = None
+
+    # Collect all plots for PDF
+    plot_paths = []
+    for entry in all_results:
+        file_report = entry.get('file_report', {})
+        for key in ['mi_plot', 'feature_plot', 'state_plot']:
+            plot_path = file_report.get(key)
+            if plot_path and os.path.exists(plot_path):
+                plot_paths.append(plot_path)
+
+    # Add all per-file summary text files as tables (optional)
+    table_csv_paths = [combined_csv_path] if combined_csv_path else []
+
+    # Generate PDF report
+    output_pdf_path = os.path.join(output_dir, f"{base_filename}_report.pdf")
+    generate_pdf_report(summary_text, plot_paths, table_csv_paths, output_pdf_path, title="Comprehensive EEG Mindfulness Index Report")
+
     return {
-        'report_dir': report_dir,
-        'markdown_report': summary_path,
-        'html_report': html_path if 'html_path' in locals() else None,
-        'combined_mi_plot': combined_mi_path,
-        'state_distribution_plot': state_dist_path
+        'summary': summary_path,
+        'combined_csv': combined_csv_path,
+        'report_pdf': output_pdf_path
     }
 
 def process_directory(input_dir, output_dir='results'):

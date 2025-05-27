@@ -1,0 +1,35 @@
+=== Mindfulness Index (MI) Analysis Summary ===
+
+File: UnicornRecorder_12_05_2025_12_41_310
+Analysis Date: 2025-05-22 10:47:37
+
+EDA file used: data/eda_data\opensignals_0007808C0700_2025-04-30_16-32-15_V.txt
+
+- Window Size: 3 seconds
+- Window Overlap: 50.0%
+- Frequency Bands: Theta (4, 7.99), Alpha (8, 12.99), Beta (13, 30)
+- MI Weights: {'theta_fz': 0.25, 'alpha_po': 0.25, 'faa': 0.2, 'beta_frontal': -0.15, 'eda_norm': -0.15}
+- State Thresholds: Focused >= 0.5, Neutral >= 0.37, Unfocused < 0.37
+
+File Information:
+- Total Duration: 205.33 seconds (3.42 minutes)
+- Analyzed Duration: 204.00 seconds
+- EDA Data Available: Yes
+
+Results Summary:
+- Total Windows Analyzed: 135
+- Average MI Score: 0.5369
+- MI Score Range: 0.3005 to 0.9918
+
+Behavioral States:
+- Focused: 71 windows (52.6%)
+- Neutral: 52 windows (38.5%)
+- Unfocused: 12 windows (8.9%)
+
+Output Files:
+- JSON Data: results/mindfulness_analysis_20250522_104715\UnicornRecorder_12_05_2025_12_41_310_20250522_104736_mindfulness_results.json
+- CSV Data: results/mindfulness_analysis_20250522_104715\UnicornRecorder_12_05_2025_12_41_310_20250522_104736_mindfulness_data.csv
+- Simplified MI Data: results/mindfulness_analysis_20250522_104715\UnicornRecorder_12_05_2025_12_41_310_20250522_104736_mi_only.csv
+- MI Plot: results/mindfulness_analysis_20250522_104715\UnicornRecorder_12_05_2025_12_41_310_20250522_104736_mi_timeseries.png
+- Feature Plot: results/mindfulness_analysis_20250522_104715\UnicornRecorder_12_05_2025_12_41_310_20250522_104736_feature_contributions.png
+- State Plot: results/mindfulness_analysis_20250522_104715\UnicornRecorder_12_05_2025_12_41_310_20250522_104736_behavioral_states.png

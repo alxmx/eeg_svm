@@ -1,0 +1,13 @@
+=== Comprehensive Mindfulness Index (MI) Analysis Summary ===
+Report Date: 2025-05-22 11:06:05
+Number of files analyzed: 1
+
+Total windows analyzed: 135
+Average MI score (all files): 0.5159
+MI score range: 0.2800 to 0.9900
+- Focused: 60 windows (44.4%)
+- Neutral: 53 windows (39.3%)
+- Unfocused: 22 windows (16.3%)
+
+Per-file summary:
+UnicornRecorder_12_05_2025_12_41_310: windows=135, avg_mi=0.5159 (min=0.2800, max=0.9900), Focused=44.4%, Neutral=39.3%, Unfocused=16.3%
