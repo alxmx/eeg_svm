@@ -1,0 +1,7 @@
+# Example user config for demo user
+{
+  "user_id": "demo_user",
+  "baseline_csv": "user_configs/demo_user_baseline.csv",
+  "calibration_time": "2025-05-27T12:00:00",
+  "n_samples": 10
+}

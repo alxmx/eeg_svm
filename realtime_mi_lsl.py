@@ -109,29 +109,32 @@ def load_or_train_models():
         svr, scaler = train_and_save_models()
     return svr, scaler
 
-def select_lsl_stream(stream_type):
+def select_lsl_stream(stream_type, name_hint=None):
+    from pylsl import resolve_streams
     print(f"Searching for available LSL streams of type '{stream_type}'...")
-    streams = resolve_byprop('type', stream_type)
+    streams = resolve_streams()
     if not streams:
-        raise RuntimeError(f"No LSL streams of type '{stream_type}' found.")
+        raise RuntimeError("No LSL streams found on the network.")
     print("Available streams:")
     for idx, s in enumerate(streams):
-        print(f"[{idx}] Name: {s.name()}, Type: {s.type()}, Channel count: {s.channel_count()}, Source ID: {s.source_id()}")
-    sel = input(f"Select stream index (0-{len(streams)-1}): ")
-    try:
-        sel = int(sel)
-        assert 0 <= sel < len(streams)
-    except Exception:
-        print("Invalid selection, defaulting to 0.")
-        sel = 0
-    return streams[sel]
+        print(f"[{idx}] Name: {s.name()} | Type: {s.type()} | Channels: {s.channel_count()} | Source ID: {s.source_id()}")
+    while True:
+        try:
+            sel = int(input(f"Select the stream index for {stream_type}: "))
+            if 0 <= sel < len(streams):
+                chosen = streams[sel]
+                print(f"[CONFIRM] Selected stream: Name='{chosen.name()}', Type='{chosen.type()}', Channels={chosen.channel_count()}, Source ID='{chosen.source_id()}'\n")
+                return chosen
+            else:
+                print(f"Invalid index. Please enter a number between 0 and {len(streams)-1}.")
+        except ValueError:
+            print("Invalid input. Please enter a valid integer index.")
 
 def calibrate_user(user_id, n_samples=100):
     """
     Calibration step: Collect baseline (ground truth) data for a new user.
     Prompts the user to relax (e.g., eyes closed), collects N samples, and saves as ground truth.
-    Creates a config file for the user with calibration info.
-    Now includes an interactive countdown, exit command, user info display, model update summary, and cumulative calibration report.
+    Now lets you select EEG and EDA LSL streams, combines their features, and streams the processed calibration data to a new LSL stream ('calibration_processed').
     """
     import glob
     print(f"\n=== Calibration for user: {user_id} ===")
@@ -155,9 +158,17 @@ def calibrate_user(user_id, n_samples=100):
         print(f"Starting in {i}...", end='\r', flush=True)
         time.sleep(1)
     print("\nPlease relax (e.g., eyes closed) and remain still. Collecting baseline samples...")
-    feature_stream = select_lsl_stream('Features')
-    feature_inlet = StreamInlet(feature_stream)
-    baseline_samples = []
+    print("Select the EEG LSL feature stream to use for calibration:")
+    eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream')
+    eeg_inlet = StreamInlet(eeg_stream)
+    print("Select the EDA LSL feature stream to use for calibration:")
+    eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals')
+    eda_inlet = StreamInlet(eda_stream)
+    # Set up a new LSL stream for processed calibration data (features only)
+    processed_info = StreamInfo('calibration_processed', 'ProcessedCalibration', len(FEATURE_ORDER), 10, 'float32', f'calib_{user_id}')
+    processed_outlet = StreamOutlet(processed_info)
+    print(f"Calibration processed LSL stream created as 'calibration_processed' with {len(FEATURE_ORDER)} channels.\n")
+    baseline_features = []
     N = n_samples
     i = 0
     while i < N:
@@ -165,17 +176,41 @@ def calibrate_user(user_id, n_samples=100):
         if user_input == 'exit':
             print("Calibration aborted by user.")
             return None, None
-        sample, _ = feature_inlet.pull_sample()
-        baseline_samples.append(sample)
-        print(f"Collected baseline sample {i+1}/{N}")
+        eeg_sample, _ = eeg_inlet.pull_sample()
+        eda_sample, _ = eda_inlet.pull_sample()
+        # --- Artifact reduction and feature extraction ---
+        eeg = np.array(eeg_sample[:8])  # First 8 EEG channels
+        acc_gyr = np.array(eeg_sample[8:14])  # Next 6 channels for artifact reduction
+        eda = np.array(eda_sample)  # EDA channels
+        # Example: simple artifact reduction (replace with your method)
+        eeg_clean = eeg - np.mean(acc_gyr)  # Placeholder for real artifact reduction
+        # Feature extraction (replace with your actual feature extraction)
+        # Here, just use mean as placeholder for each feature
+        theta_fz = np.mean(eeg_clean)  # Replace with real theta extraction
+        alpha_po = np.mean(eeg_clean)  # Replace with real alpha extraction
+        faa = np.mean(eeg_clean)       # Replace with real FAA extraction
+        beta_frontal = np.mean(eeg_clean)  # Replace with real beta extraction
+        eda_norm = np.mean(eda)        # Replace with real EDA normalization
+        features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+        baseline_features.append(features)
+        processed_outlet.push_sample(features)
+        print(f"Collected and streamed baseline sample {i+1}/{N}")
         i += 1
-    baseline_arr = np.array(baseline_samples)
-    # Save baseline as CSV for this user
+    baseline_arr = np.array(baseline_features)
+    # Save baseline features as CSV for this user (append if exists)
     baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
-    pd.DataFrame(baseline_arr, columns=FEATURE_ORDER).to_csv(baseline_csv, index=False)
-    print(f"Baseline calibration data saved to {baseline_csv}")
-    print(f"[CONFIRM] Calibration file created: {baseline_csv}")
-    # Save user config JSON
+    new_df = pd.DataFrame(baseline_arr, columns=FEATURE_ORDER)
+    if os.path.exists(baseline_csv):
+        existing_df = pd.read_csv(baseline_csv)
+        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+        combined_df.to_csv(baseline_csv, index=False)
+        print(f"Appended new calibration features to {baseline_csv}")
+    else:
+        new_df.to_csv(baseline_csv, index=False)
+        print(f"Baseline calibration features saved to {baseline_csv}")
+    print(f"[CONFIRM] Calibration file created/updated: {baseline_csv}")
+
+    # --- Save user config JSON (keep this, do not save raw data) ---
     user_config = {
         'user_id': user_id,
         'baseline_csv': baseline_csv,
@@ -186,38 +221,22 @@ def calibrate_user(user_id, n_samples=100):
         json.dump(user_config, f, indent=2)
     print(f"User config saved to {config_path}")
     print(f"[CONFIRM] Calibration config created: {config_path}")
-    # Update cumulative calibration report
-    report_path = os.path.join(LOG_DIR, 'calibration_report.csv')
-    import pandas as pd
-    new_row = {
-        'user_id': user_id,
-        'calibration_time': user_config['calibration_time'],
-        'n_samples': N,
-        'baseline_csv': baseline_csv
-    }
-    if os.path.exists(report_path):
-        df = pd.read_csv(report_path)
-        # Remove previous entry for this user if exists
-        df = df[df['user_id'] != user_id]
-        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-    else:
-        df = pd.DataFrame([new_row])
-    df.to_csv(report_path, index=False)
-    print(f"Cumulative calibration report updated: {report_path}")
-    # Show model update summary (from logs)
-    metrics_log = os.path.join(LOG_DIR, 'metrics_log.txt')
-    if os.path.exists(metrics_log):
-        with open(metrics_log, 'r') as f:
-            lines = f.readlines()
-        user_updates = [line for line in lines if user_id in line or 'Precision' in line]
-        print(f"[MODEL UPDATE SUMMARY]")
-        print(f"  Total updates: {len(user_updates)}")
-        if user_updates:
-            print(f"  Last update: {user_updates[-1].strip()}")
-        else:
-            print("  No updates found for this user.")
-    else:
-        print("[MODEL UPDATE SUMMARY] No model update log found.")
+
+    # --- AUTOMATIC SVR TRAINING AFTER CALIBRATION ---
+    print("[AUTO] Training SVR model for this user based on calibration data...")
+    from sklearn.svm import SVR
+    from sklearn.preprocessing import StandardScaler
+    calib_df = pd.read_csv(baseline_csv)
+    X_calib = calib_df[FEATURE_ORDER].values
+    y_calib = np.array([calculate_mi(f) for f in X_calib])
+    scaler = StandardScaler().fit(X_calib)
+    X_calib_scaled = scaler.transform(X_calib)
+    svr = SVR().fit(X_calib_scaled, y_calib)
+    user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
+    user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
+    dump(svr, user_model_path)
+    dump(scaler, user_scaler_path)
+    print(f"[AUTO] User SVR model and scaler saved: {user_model_path}, {user_scaler_path}")
     return baseline_csv, config_path
 
 # --- Visualization ---
@@ -335,17 +354,29 @@ def main():
     calibrate = input("Run calibration step for this user? (y/n): ").strip().lower() == 'y'
     if calibrate:
         calibrate_user(user_id, n_samples=calibration_duration)
-    print(f"Checking for existing model: {MODEL_PATH} and scaler: {SCALER_PATH}")
-    svr, scaler = load_or_train_models()
-    print("Model and scaler ready.")
+    print(f"Checking for user-specific model and scaler for user: {user_id}")
+    user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
+    user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
+    if os.path.exists(user_model_path) and os.path.exists(user_scaler_path):
+        print(f"Loading user-specific model and scaler for user {user_id}...")
+        svr = load(user_model_path)
+        scaler = load(user_scaler_path)
+        print("User-specific model and scaler loaded.")
+    else:
+        print(f"User-specific model/scaler not found. Loading or training global model...")
+        svr, scaler = load_or_train_models()
+        print("Model and scaler ready.")
 
     # Set up online learner
     print("Initializing online adaptive model (SGDRegressor)...")
-    online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
-    print("Loading training data for online model warm start...")
-    X, y = load_training_data()
+    print("Loading calibration data for online model warm start...")
+    # Use user-specific calibration data for warm start
+    calib_df = pd.read_csv(os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv'))
+    X = calib_df[FEATURE_ORDER].values
     X_scaled = scaler.transform(X)
-    print("Fitting online model with SVR predictions...")
+    y = np.array([calculate_mi(f) for f in X])
+    print("Fitting online model with user SVR predictions...")
+    online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
     online_model.partial_fit(X_scaled, svr.predict(X_scaled))
     print("Online model initialized.")
 
@@ -358,11 +389,11 @@ def main():
 
     # LSL streams
     print("Select the EEG LSL feature stream to use:")
-    eeg_stream = select_lsl_stream('EEG')
+    eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream')
     eeg_inlet = StreamInlet(eeg_stream)
     print("EEG feature stream connected.")
     print("Select the EDA LSL feature stream to use:")
-    eda_stream = select_lsl_stream('EDA')
+    eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals')
     eda_inlet = StreamInlet(eda_stream)
     print("EDA feature stream connected.")
     print("Resolving Unity label stream (type='UnityMarkers')...")
