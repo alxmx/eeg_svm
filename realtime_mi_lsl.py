@@ -151,7 +151,7 @@ def select_lsl_stream(stream_type, name_hint=None, allow_skip=False):
         except ValueError:
             print("Invalid input. Please enter a valid integer index.")
 
-def calibrate_user(user_id, calibration_duration_sec=10):
+def calibrate_user(user_id, calibration_duration_sec=60):
     """
     Calibration step: Collect baseline (ground truth) data for a new user at 250 Hz.
     Uses LSL timestamps for all samples. EDA is downsampled/interpolated to 250 Hz.
@@ -264,6 +264,11 @@ def calibrate_user(user_id, calibration_duration_sec=10):
     X_calib = calib_df[FEATURE_ORDER].values
     y_calib = np.array([calculate_mi(f) for f in X_calib])
 
+    # Warn if all MI values are 0 or 1 (likely feature/coding error)
+    if np.all(y_calib == 0) or np.all(y_calib == 1):
+        print("[ERROR] All calibration MI values are 0 or 1. This suggests a feature extraction or coding error. Skipping model update.")
+        return baseline_csv, config_path
+
     # Filter out NaN samples before training
     valid_idx = ~np.isnan(X_calib).any(axis=1) & ~np.isnan(y_calib)
     X_calib = X_calib[valid_idx]
@@ -271,7 +276,6 @@ def calibrate_user(user_id, calibration_duration_sec=10):
     if len(X_calib) == 0:
         print("[ERROR] All calibration samples are invalid (NaN). Skipping calibration and model update.")
         return baseline_csv, config_path
-
     # Load generic scaler and model as base
     generic_scaler_path = os.path.join(MODEL_DIR, 'scaler.joblib')
     generic_model_path = os.path.join(MODEL_DIR, 'svm_model.joblib')
@@ -291,7 +295,10 @@ def calibrate_user(user_id, calibration_duration_sec=10):
     # Fine-tune SVR: re-fit on user data, starting from generic model's parameters
     # (SVR does not support partial_fit, so we re-fit, but you could use warm_start for some estimators)
     svr = SVR()
-    svr.set_params(**base_model.get_params())
+    # Only set valid SVR parameters from base_model
+    valid_params = svr.get_params().keys()
+    base_params = {k: v for k, v in base_model.get_params().items() if k in valid_params}
+    svr.set_params(**base_params)
     svr.fit(X_calib_scaled, y_calib)
 
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
@@ -502,7 +509,6 @@ def main():
             MI_UPDATE_INTERVAL = float(mi_update_interval_input)
     except Exception:
         MI_UPDATE_INTERVAL = 3.0
-    print(f"[INFO] MI will be calculated at {MI_CALC_RATE} Hz and pushed to LSL every {MI_UPDATE_INTERVAL} seconds (mean MI over interval).\n")
 
     visualizer = OnlineVisualizer()
     EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
@@ -574,23 +580,46 @@ def main():
             eda_norm = np.mean(eda_win)
             features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
             sample = np.array(features).reshape(1, -1)
-            x_scaled = scaler.transform(sample)
-            if np.isnan(x_scaled).any():
-                print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
+            # Warn if features are all zeros, all NaN, or constant
+            if np.all(np.isnan(sample)):
+                print("[WARN] All features are NaN. Skipping MI prediction for this window.")
                 mi_pred = 0.0
+                skipped_reason = 'all_nan'
+            elif np.all(sample == 0):
+                print("[WARN] All features are zero. Skipping MI prediction for this window.")
+                mi_pred = 0.0
+                skipped_reason = 'all_zero'
+            elif np.all(sample == sample[0,0]):
+                print("[WARN] All features are constant. Skipping MI prediction for this window.")
+                mi_pred = 0.0
+                skipped_reason = 'constant'
             else:
-                mi_pred = svr.predict(x_scaled)[0]
+                x_scaled = scaler.transform(sample)
+                if np.isnan(x_scaled).any():
+                    print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
+                    mi_pred = 0.0
+                    skipped_reason = 'scaled_nan'
+                else:
+                    mi_pred = svr.predict(x_scaled)[0]
+                    skipped_reason = None
+            # --- Real-time classification printout ---
+            if mi_pred >= 0.5:
+                state = "Focused"
+            elif mi_pred >= 0.37:
+                state = "Neutral"
+            else:
+                state = "Unfocused"
+            print(f"MI: {mi_pred:.3f} | State: {state}")
             mi_buffer.append(mi_pred)
+            if skipped_reason:
+                if 'mi_skipped_count' not in locals():
+                    mi_skipped_count = {}
+                mi_skipped_count[skipped_reason] = mi_skipped_count.get(skipped_reason, 0) + 1
             # Only push to LSL at MI_UPDATE_INTERVAL
             if (now - last_push_time) >= MI_UPDATE_INTERVAL:
                 mean_mi = float(np.mean(mi_buffer)) if mi_buffer else 0.0
                 ts = TS_BUFFER[-1]
-                if mean_mi >= 0.5:
-                    state = "Focused"
-                elif mean_mi >= 0.37:
-                    state = "Neutral"
-                else:
-                    state = "Unfocused"
+                # State already determined above for last mi_pred
                 print(f"Pushed mean MI: {mean_mi:.3f} | State: {state} (to processed_MI stream)")
                 mi_outlet.push_sample([mean_mi], ts)
                 mi_records.append({'mi': mean_mi, 'timestamp': ts, 'state': state})
@@ -606,6 +635,11 @@ def main():
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
     pd.DataFrame(mi_records).to_csv(mi_csv_path, index=False)
     print(f"\n[REPORT] MI session data saved to {mi_csv_path}")
+    # Print summary of MI prediction skips if any
+    if 'mi_skipped_count' in locals() and mi_skipped_count:
+        print("\n[SUMMARY] MI predictions skipped due to feature issues:")
+        for reason, count in mi_skipped_count.items():
+            print(f"  {reason}: {count} windows skipped")
     mi_vals = [r['mi'] for r in mi_records]
     if mi_vals:
         mi_arr = np.array(mi_vals)
