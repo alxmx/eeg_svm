@@ -212,6 +212,7 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     print(f"Collecting {n_samples} samples at 250 Hz for {calibration_duration_sec} seconds...")
     max_wall_time = calibration_duration_sec * 2
     start_time = time.time()
+    feature_push_count = 0
     for i in range(n_samples):
         if (time.time() - start_time) > max_wall_time:
             print(f"[ERROR] Calibration exceeded maximum allowed time ({max_wall_time}s). Aborting calibration.")
@@ -224,30 +225,30 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         eeg = np.array(eeg_sample[:8])
         acc_gyr = np.array(eeg_sample[8:14])
         eda = np.array(eda_sample[:2])
-        # Always use only the second EDA channel (index 1)
         eda_feat = eda[1]
         eeg_samples.append(eeg)
         accgyr_samples.append(acc_gyr)
         eda_samples.append(eda)
-        ts_samples.append(eeg_ts)  # Use EEG timestamp as reference
-        # Only compute features if we have a full window
-        if len(eeg_samples) >= window_size:
-            eeg_win = np.array(eeg_samples[-window_size:])  # shape (window_size, 8)
-            eda_win = np.array(eda_samples[-window_size:])  # shape (window_size, 2)
+        ts_samples.append(eeg_ts)
+        # Only compute features every 1 second (every 250 samples)
+        if len(eeg_samples) >= window_size and (i+1) % window_size == 0:
+            eeg_win = np.array(eeg_samples[-window_size:])
+            eda_win = np.array(eda_samples[-window_size:])
             sf = 250
-            theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))  # Fz
-            alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2  # PO7, PO8
-            faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)  # C3 - C4
-            beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))  # Fz
-            eda_norm = np.mean(eda_win[:,1])  # Only use channel 1
+            theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))
+            alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
+            faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
+            beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
+            eda_norm = np.mean(eda_win[:,1])
             features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
             features_list.append(features)
             processed_outlet.push_sample(features, eeg_ts)
+            feature_push_count += 1
             print(f"[DEBUG] calibration_processed: pushed features at t={eeg_ts:.3f} {features}")
         if i % 250 == 0:
             print(f"Collected {i} samples...")
     actual_duration = time.time() - start_time
-    print(f"[SUMMARY] calibration_processed: pushed {len(features_list)} feature windows. Actual duration: {actual_duration:.2f} seconds.")
+    print(f"[SUMMARY] calibration_processed: pushed {feature_push_count} feature windows (1 Hz). Actual duration: {actual_duration:.2f} seconds.")
     # After collection, use features_list for baseline_arr
     baseline_arr = np.array(features_list)
     baseline_arr = baseline_arr[~np.isnan(baseline_arr).any(axis=1)]
@@ -321,12 +322,23 @@ def calibrate_user(user_id, calibration_duration_sec=60):
 
     # Fine-tune SVR: re-fit on user data, starting from generic model's parameters
     # (SVR does not support partial_fit, so we re-fit, but you could use warm_start for some estimators)
-    svr = SVR()
+    # Limit number of samples for SVR fitting to speed up (e.g., 2000)
+    max_svr_samples = 2000
+    if len(X_calib_scaled) > max_svr_samples:
+        print(f"[INFO] Limiting SVR fitting to first {max_svr_samples} samples out of {len(X_calib_scaled)}.")
+        X_fit = X_calib_scaled[:max_svr_samples]
+        y_fit = y_calib[:max_svr_samples]
+    else:
+        X_fit = X_calib_scaled
+        y_fit = y_calib
+    # Use linear kernel for much faster fitting
+    svr = SVR(kernel='linear')
     # Only set valid SVR parameters from base_model
     valid_params = svr.get_params().keys()
     base_params = {k: v for k, v in base_model.get_params().items() if k in valid_params}
     svr.set_params(**base_params)
-    svr.fit(X_calib_scaled, y_calib)
+    print(f"[DEBUG] Fitting SVR with kernel='linear' on {len(X_fit)} samples...")
+    svr.fit(X_fit, y_fit)
 
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
     user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
@@ -523,7 +535,7 @@ def main():
     label_inlet = StreamInlet(label_stream)
     print("Unity label stream connected.")
     print("Creating MI output LSL stream (type='processed_MI')...")
-    mi_info = StreamInfo('processed_MI', 'MI', 1, 10, 'float32', 'mi_stream')
+    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')  # 1 Hz output
     mi_outlet = StreamOutlet(mi_info)
     print("MI output stream created as 'processed_MI'.\n")
 
@@ -547,10 +559,10 @@ def main():
 
     visualizer = OnlineVisualizer()
     EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
-    WINDOW_SIZE = 3 * 250  # 3 seconds at 250 Hz
+    WINDOW_SIZE = 250  # 1 second at 250 Hz
     mi_window = []  # Moving window for MI predictions
     mi_records = []  # To store MI, timestamp, and state
-    print("Entering real-time MI prediction loop at 250 Hz. Classification every 3 seconds.")
+    print("Entering real-time MI prediction loop at 1 Hz. Classification every 3 seconds.")
     # --- Automatic input data analysis and adaptation ---
     eeg_scale_factor = 1.0
     eda_scale_factor = 1.0
@@ -631,116 +643,98 @@ def main():
     t.start()
     last_push_time = time.time()
     mi_buffer = []
-    mi_records = []  # To store MI, timestamp, and state
+    mi_records = []
     next_calc_time = time.time()
-    print(f"Entering real-time MI prediction loop at {MI_CALC_RATE} Hz. Classification window: 3 seconds.\n")
+    print(f"Entering real-time MI prediction loop at 1 Hz. Classification window: 3 seconds.\n")
     while not stop_flag['stop']:
         now = time.time()
         if now < next_calc_time:
             time.sleep(max(0, next_calc_time - now))
             continue
-        next_calc_time += 1.0 / MI_CALC_RATE
-        if eeg_inlet is not None:
-            eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
-            eeg = np.array(eeg_sample[:8]) * eeg_scale_factor
-            acc_gyr = np.array(eeg_sample[8:14])
-            # --- RAW DATA CHECK ---
-            if np.issubdtype(eeg.dtype, np.integer):
-                print("[WARN] EEG data appears to be integer. RAW (unconverted, unnormalized) EEG is expected.")
-            elif np.nanmax(np.abs(eeg)) < 1.0:
-                print("[WARN] EEG data values are very small (<1.0). RAW EEG is expected. Check your LSL stream.")
-            if artifact_regressors is not None:
-                eeg_clean = apply_artifact_regression(eeg, acc_gyr, artifact_regressors)
-            else:
-                eeg_clean = eeg  # fallback: no artifact regression
-        else:
-            eeg_clean = np.zeros(8)
-            eeg_ts = time.time()
-        if eda_inlet is not None:
-            eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
-            eda = np.array(eda_sample[:2]) * eda_scale_factor
-            # --- RAW DATA CHECK ---
-            if np.issubdtype(eda.dtype, np.integer):
-                print("[WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
-            elif np.nanmax(np.abs(eda)) < 0.01:
-                print("[WARN] EDA data values are very small (<0.01). RAW EDA is expected. Check your LSL stream.")
-        else:
-            eda = np.zeros(2)
-            eda_ts = eeg_ts
-        EEG_BUFFER.append(eeg_clean)
-        EDA_BUFFER.append(eda)
-        TS_BUFFER.append(eeg_ts)
-        if len(EEG_BUFFER) > WINDOW_SIZE:
-            EEG_BUFFER = EEG_BUFFER[-WINDOW_SIZE:]
-            EDA_BUFFER = EDA_BUFFER[-WINDOW_SIZE:]
-            TS_BUFFER = TS_BUFFER[-WINDOW_SIZE:]
-        # Run MI calculation at MI_CALC_RATE
-        if len(EEG_BUFFER) == WINDOW_SIZE:
-            eeg_win = np.array(EEG_BUFFER)
-            eda_win = np.array(EDA_BUFFER)
-            # --- Feature extraction (windowed, real) ---
-            sf = 250
-            theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))  # Fz
-            alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2  # PO7, PO8
-            faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)  # C3 - C4
-            beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))  # Fz
-            eda_norm = np.mean(eda_win[:,1])  # Only use channel 1
-            features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-            sample = np.array(features).reshape(1, -1)
-            # Warn if features are all zeros, all NaN, or constant
-            if np.all(np.isnan(sample)):
-                print("[WARN] All features are NaN. Skipping MI prediction for this window.")
-                mi_pred = 0.0
-                skipped_reason = 'all_nan'
-            elif np.all(sample == 0):
-                print("[WARN] All features are zero. Skipping MI prediction for this window.")
-                mi_pred = 0.0
-                skipped_reason = 'all_zero'
-            elif np.all(sample == sample[0,0]):
-                print("[WARN] All features are constant. Skipping MI prediction for this window.")
-                mi_pred = 0.0
-                skipped_reason = 'constant'
-            else:
-                x_scaled = scaler.transform(sample)
-                if np.isnan(x_scaled).any():
-                    print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
-                    mi_pred = 0.0
-                    skipped_reason = 'scaled_nan'
+        next_calc_time += 1.0  # 1 Hz
+        # Collect 250 samples for 1-second window
+        eeg_win_buf, eda_win_buf, ts_win_buf = [], [], []
+        for _ in range(WINDOW_SIZE):
+            if eeg_inlet is not None:
+                eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
+                eeg = np.array(eeg_sample[:8]) * eeg_scale_factor
+                acc_gyr = np.array(eeg_sample[8:14])
+                if artifact_regressors is not None:
+                    eeg_clean = apply_artifact_regression(eeg, acc_gyr, artifact_regressors)
                 else:
-                    mi_pred = svr.predict(x_scaled)[0]
-                    skipped_reason = None
-            # --- Real-time classification printout ---
-            if mi_pred >= 0.5:
-                state = "Focused"
-            elif mi_pred >= 0.37:
-                state = "Neutral"
+                    eeg_clean = eeg
             else:
-                state = "Unfocused"
-            print(f"MI: {mi_pred:.3f} | State: {state}")
-            mi_buffer.append(mi_pred)
-            if skipped_reason:
-                if 'mi_skipped_count' not in locals():
-                    mi_skipped_count = {}
-                mi_skipped_count[skipped_reason] = mi_skipped_count.get(skipped_reason, 0) + 1
-            # Only push to LSL at MI_UPDATE_INTERVAL
-            if (now - last_push_time) >= MI_UPDATE_INTERVAL:
-                mean_mi = float(np.mean(mi_buffer)) if mi_buffer else 0.0
-                ts = TS_BUFFER[-1]
-                print(f"Pushed mean MI: {mean_mi:.3f} | State: {state} (to processed_MI stream) [DEBUG]")
-                mi_outlet.push_sample([mean_mi], ts)
-                mi_records.append({'mi': mean_mi, 'timestamp': ts, 'state': state})
-                mi_buffer = []
-                last_push_time = now
-            label, label_ts = label_inlet.pull_sample(timeout=0.01)
-            if label:
-                try:
-                    label_val = float(label[0])
-                    visualizer.update(mi_pred, label_val)
-                except (ValueError, TypeError):
-                    # Non-numeric label, skip updating label history
-                    visualizer.update(mi_pred, None)
+                eeg_clean = np.zeros(8)
+                eeg_ts = time.time()
+            if eda_inlet is not None:
+                eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
+                eda = np.array(eda_sample[:2]) * eda_scale_factor
             else:
-                visualizer.update(mi_pred)
+                eda = np.zeros(2)
+                eda_ts = eeg_ts
+            eeg_win_buf.append(eeg_clean)
+            eda_win_buf.append(eda)
+            ts_win_buf.append(eeg_ts)
+        eeg_win = np.array(eeg_win_buf)
+        eda_win = np.array(eda_win_buf)
+        # --- Feature extraction (windowed, real) ---
+        sf = 250
+        theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))
+        alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
+        faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
+        beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
+        eda_norm = np.mean(eda_win[:,1])
+        features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+        sample = np.array(features).reshape(1, -1)
+        # Warn if features are all zeros, all NaN, or constant
+        if np.all(np.isnan(sample)):
+            print("[WARN] All features are NaN. Skipping MI prediction for this window.")
+            mi_pred = 0.0
+            skipped_reason = 'all_nan'
+        elif np.all(sample == 0):
+            print("[WARN] All features are zero. Skipping MI prediction for this window.")
+            mi_pred = 0.0
+            skipped_reason = 'all_zero'
+        elif np.all(sample == sample[0,0]):
+            print("[WARN] All features are constant. Skipping MI prediction for this window.")
+            mi_pred = 0.0
+            skipped_reason = 'constant'
+        else:
+            x_scaled = scaler.transform(sample)
+            if np.isnan(x_scaled).any():
+                print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
+                mi_pred = 0.0
+                skipped_reason = 'scaled_nan'
+            else:
+                mi_pred = svr.predict(x_scaled)[0]
+                skipped_reason = None
+        # --- Real-time classification printout ---
+        if mi_pred >= 0.5:
+            state = "Focused"
+        elif mi_pred >= 0.37:
+            state = "Neutral"
+        else:
+            state = "Unfocused"
+        print(f"MI: {mi_pred:.3f} | State: {state}")
+        mi_buffer.append(mi_pred)
+        if skipped_reason:
+            if 'mi_skipped_count' not in locals():
+                mi_skipped_count = {}
+            mi_skipped_count[skipped_reason] = mi_skipped_count.get(skipped_reason, 0) + 1
+        # Only push to LSL once per second (1 Hz)
+        ts = ts_win_buf[-1]
+        print(f"Pushed MI: {mi_pred:.3f} | State: {state} (to processed_MI stream) [DEBUG]")
+        mi_outlet.push_sample([mi_pred], ts)
+        mi_records.append({'mi': mi_pred, 'timestamp': ts, 'state': state})
+        label, label_ts = label_inlet.pull_sample(timeout=0.01)
+        if label:
+            try:
+                label_val = float(label[0])
+                visualizer.update(mi_pred, label_val)
+            except (ValueError, TypeError):
+                visualizer.update(mi_pred, None)
+        else:
+            visualizer.update(mi_pred)
     # --- After session: Save MI CSV and print report ---
     session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
