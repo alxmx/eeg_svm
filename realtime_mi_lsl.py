@@ -109,24 +109,38 @@ def load_or_train_models():
         svr, scaler = train_and_save_models()
     return svr, scaler
 
-def select_lsl_stream(stream_type, name_hint=None):
+def select_lsl_stream(stream_type, name_hint=None, allow_skip=False):
     from pylsl import resolve_streams
     print(f"Searching for available LSL streams of type '{stream_type}'...")
     streams = resolve_streams()
     if not streams:
-        raise RuntimeError("No LSL streams found on the network.")
+        if allow_skip:
+            print(f"No LSL streams found for type '{stream_type}'. You may skip this sensor.")
+            skip = input(f"Type 'skip' to continue without {stream_type}, or press Enter to retry: ").strip().lower()
+            if skip == 'skip':
+                return None
+            else:
+                return select_lsl_stream(stream_type, name_hint, allow_skip)
+        else:
+            raise RuntimeError("No LSL streams found on the network.")
     print("Available streams:")
     for idx, s in enumerate(streams):
         print(f"[{idx}] Name: {s.name()} | Type: {s.type()} | Channels: {s.channel_count()} | Source ID: {s.source_id()}")
+    if allow_skip:
+        print(f"[{len(streams)}] SKIP this sensor and use generic model/scaler")
     while True:
         try:
-            sel = int(input(f"Select the stream index for {stream_type}: "))
+            sel = input(f"Select the stream index for {stream_type}: ")
+            if allow_skip and sel.strip() == str(len(streams)):
+                print(f"[SKIP] Skipping {stream_type} stream selection. Will use generic model/scaler.")
+                return None
+            sel = int(sel)
             if 0 <= sel < len(streams):
                 chosen = streams[sel]
                 print(f"[CONFIRM] Selected stream: Name='{chosen.name()}', Type='{chosen.type()}', Channels={chosen.channel_count()}, Source ID='{chosen.source_id()}'\n")
                 return chosen
             else:
-                print(f"Invalid index. Please enter a number between 0 and {len(streams)-1}.")
+                print(f"Invalid index. Please enter a number between 0 and {len(streams)-1} (or {len(streams)} to skip if available).")
         except ValueError:
             print("Invalid input. Please enter a valid integer index.")
 
@@ -170,12 +184,9 @@ def calibrate_user(user_id, n_samples=100):
     print(f"Calibration processed LSL stream created as 'calibration_processed' with {len(FEATURE_ORDER)} channels.\n")
     baseline_features = []
     N = n_samples
-    i = 0
-    while i < N:
-        user_input = input(f"Press Enter to collect sample {i+1}/{N} or type 'exit' to abort: ").strip().lower()
-        if user_input == 'exit':
-            print("Calibration aborted by user.")
-            return None, None
+    sample_interval = 1  # seconds between samples
+    print(f"Collecting {N} samples automatically, one every {sample_interval} second(s)...")
+    for i in range(N):
         eeg_sample, _ = eeg_inlet.pull_sample()
         eda_sample, _ = eda_inlet.pull_sample()
         # --- Artifact reduction and feature extraction ---
@@ -195,7 +206,7 @@ def calibrate_user(user_id, n_samples=100):
         baseline_features.append(features)
         processed_outlet.push_sample(features)
         print(f"Collected and streamed baseline sample {i+1}/{N}")
-        i += 1
+        time.sleep(sample_interval)
     baseline_arr = np.array(baseline_features)
     # Save baseline features as CSV for this user (append if exists)
     baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
@@ -226,9 +237,28 @@ def calibrate_user(user_id, n_samples=100):
     print("[AUTO] Training SVR model for this user based on calibration data...")
     from sklearn.svm import SVR
     from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import mean_absolute_error, r2_score
     calib_df = pd.read_csv(baseline_csv)
     X_calib = calib_df[FEATURE_ORDER].values
     y_calib = np.array([calculate_mi(f) for f in X_calib])
+
+    # --- Evaluate previous model/scaler if they exist ---
+    prev_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
+    prev_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
+    prev_metrics = None
+    if os.path.exists(prev_model_path) and os.path.exists(prev_scaler_path):
+        prev_svr = load(prev_model_path)
+        prev_scaler = load(prev_scaler_path)
+        X_prev_scaled = prev_scaler.transform(X_calib)
+        y_prev_pred = prev_svr.predict(X_prev_scaled)
+        prev_mae = mean_absolute_error(y_calib, y_prev_pred)
+        prev_r2 = r2_score(y_calib, y_prev_pred)
+        prev_metrics = {'mae': prev_mae, 'r2': prev_r2}
+        print(f"[REPORT] Previous model on new calibration: MAE={prev_mae:.4f}, R2={prev_r2:.4f}")
+    else:
+        print("[REPORT] No previous user model/scaler to compare.")
+
+    # --- Train new model/scaler ---
     scaler = StandardScaler().fit(X_calib)
     X_calib_scaled = scaler.transform(X_calib)
     svr = SVR().fit(X_calib_scaled, y_calib)
@@ -237,6 +267,26 @@ def calibrate_user(user_id, n_samples=100):
     dump(svr, user_model_path)
     dump(scaler, user_scaler_path)
     print(f"[AUTO] User SVR model and scaler saved: {user_model_path}, {user_scaler_path}")
+
+    # --- Evaluate new model ---
+    y_new_pred = svr.predict(X_calib_scaled)
+    new_mae = mean_absolute_error(y_calib, y_new_pred)
+    new_r2 = r2_score(y_calib, y_new_pred)
+    print(f"[REPORT] New model on calibration: MAE={new_mae:.4f}, R2={new_r2:.4f}")
+
+    # --- Save comparative report ---
+    comp_report = {
+        'user_id': user_id,
+        'calibration_time': str(datetime.now()),
+        'n_samples': len(y_calib),
+        'prev_mae': prev_metrics['mae'] if prev_metrics else None,
+        'prev_r2': prev_metrics['r2'] if prev_metrics else None,
+        'new_mae': new_mae,
+        'new_r2': new_r2
+    }
+    comp_report_path = os.path.join(LOG_DIR, f"{user_id}_calibration_comparative_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+    pd.DataFrame([comp_report]).to_csv(comp_report_path, index=False)
+    print(f"[REPORT] Calibration comparative report saved to {comp_report_path}")
     return baseline_csv, config_path
 
 # --- Visualization ---
@@ -389,13 +439,21 @@ def main():
 
     # LSL streams
     print("Select the EEG LSL feature stream to use:")
-    eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream')
-    eeg_inlet = StreamInlet(eeg_stream)
-    print("EEG feature stream connected.")
+    eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream', allow_skip=True)
+    if eeg_stream is not None:
+        eeg_inlet = StreamInlet(eeg_stream)
+        print("EEG feature stream connected.")
+    else:
+        eeg_inlet = None
+        print("EEG stream skipped. Will use generic model/scaler.")
     print("Select the EDA LSL feature stream to use:")
-    eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals')
-    eda_inlet = StreamInlet(eda_stream)
-    print("EDA feature stream connected.")
+    eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals', allow_skip=True)
+    if eda_stream is not None:
+        eda_inlet = StreamInlet(eda_stream)
+        print("EDA feature stream connected.")
+    else:
+        eda_inlet = None
+        print("EDA stream skipped. Will use generic model/scaler.")
     print("Resolving Unity label stream (type='UnityMarkers')...")
     label_stream = select_lsl_stream('UnityMarkers')
     label_inlet = StreamInlet(label_stream)
@@ -406,29 +464,58 @@ def main():
     print("MI output stream created as 'processed_MI'.\n")
 
     visualizer = OnlineVisualizer()
-    print("Entering real-time MI prediction loop. Press Ctrl+C to stop.")
+    print("Entering real-time MI prediction loop. Press Enter to stop.")
     mi_window = []  # Moving window for MI predictions
-    while True:
-        print("\nWaiting for new EEG and EDA feature samples from LSL...")
-        eeg_sample, _ = eeg_inlet.pull_sample()
-        eda_sample, _ = eda_inlet.pull_sample()
-        print(f"Received EEG sample: {eeg_sample}")
-        print(f"Received EDA sample: {eda_sample}")
-        # Combine EEG and EDA features (assuming both are lists/arrays)
-        sample = np.array(list(eeg_sample) + list(eda_sample)).reshape(1, -1)
+    mi_records = []  # To store MI, timestamp, and state
+    import threading
+    import sys
+    stop_flag = {'stop': False}
+    def wait_for_enter():
+        input("\nPress Enter to end the session and generate report...\n")
+        stop_flag['stop'] = True
+    t = threading.Thread(target=wait_for_enter)
+    t.daemon = True
+    t.start()
+    while not stop_flag['stop']:
+        if eeg_inlet is not None:
+            eeg_sample, _ = eeg_inlet.pull_sample()
+            eeg = np.array(eeg_sample[:8])
+            acc_gyr = np.array(eeg_sample[8:14])
+            eeg_clean = eeg - np.mean(acc_gyr)
+        else:
+            eeg_clean = np.zeros(8)  # or use a default/fallback value
+        if eda_inlet is not None:
+            eda_sample, _ = eda_inlet.pull_sample()
+            eda = np.array(eda_sample)
+        else:
+            eda = np.zeros(1)  # or use a default/fallback value
+        # Feature extraction (fallback if needed)
+        theta_fz = np.mean(eeg_clean)
+        alpha_po = np.mean(eeg_clean)
+        faa = np.mean(eeg_clean)
+        beta_frontal = np.mean(eeg_clean)
+        eda_norm = np.mean(eda)
+        features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+        sample = np.array(features).reshape(1, -1)
         x_scaled = scaler.transform(sample)
         mi_pred = online_model.predict(x_scaled)[0]
-        print(f"Predicted MI: {mi_pred:.3f} (pushed to processed_MI stream)")
+        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        # Classify MI for Unity color logic
+        if mi_pred >= 0.5:
+            state = "Focused"
+        elif mi_pred >= 0.37:
+            state = "Neutral"
+        else:
+            state = "Unfocused"
+        print(f"Predicted MI: {mi_pred:.3f} | State: {state} (pushed to processed_MI stream)")
         mi_outlet.push_sample([mi_pred])
-        # Add to moving window
         mi_window.append(mi_pred)
+        mi_records.append({'timestamp': ts, 'mi': mi_pred, 'state': state})
         if len(mi_window) > ONLINE_UPDATE_WINDOW:
             mi_window.pop(0)
-        # Optional: update with Unity label if threshold trigger is met
         label, _ = label_inlet.pull_sample(timeout=0.01)
         update_triggered = False
         if len(mi_window) == ONLINE_UPDATE_WINDOW and label:
-            # Check if MI is consistently above or below thresholds
             above = sum([v >= MI_THRESHOLDS['focused'] for v in mi_window])
             below = sum([v < MI_THRESHOLDS['neutral'] for v in mi_window])
             if above / ONLINE_UPDATE_WINDOW >= ONLINE_UPDATE_RATIO:
@@ -448,6 +535,34 @@ def main():
             if label:
                 print("Label received from Unity, but threshold not met. No update.")
             visualizer.update(mi_pred)
+    # --- After session: Save MI CSV and print report ---
+    session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
+    pd.DataFrame(mi_records).to_csv(mi_csv_path, index=False)
+    print(f"\n[REPORT] MI session data saved to {mi_csv_path}")
+    mi_vals = [r['mi'] for r in mi_records]
+    if mi_vals:
+        mi_arr = np.array(mi_vals)
+        summary = {
+            'user_id': user_id,
+            'session_time': session_time,
+            'n_samples': len(mi_arr),
+            'mi_mean': np.mean(mi_arr),
+            'mi_std': np.std(mi_arr),
+            'mi_min': np.min(mi_arr),
+            'mi_max': np.max(mi_arr),
+            'focused_pct': 100 * sum(v >= 0.5 for v in mi_arr) / len(mi_arr),
+            'neutral_pct': 100 * sum((v >= 0.37) and (v < 0.5) for v in mi_arr) / len(mi_arr),
+            'unfocused_pct': 100 * sum(v < 0.37 for v in mi_arr) / len(mi_arr)
+        }
+        report_path = os.path.join(LOG_DIR, f'{user_id}_mi_report_{session_time}.csv')
+        pd.DataFrame([summary]).to_csv(report_path, index=False)
+        print("\n[SESSION SUMMARY REPORT]")
+        for k, v in summary.items():
+            print(f"{k}: {v}")
+        print(f"\n[REPORT] Session summary saved to {report_path}")
+    else:
+        print("No MI data recorded in this session.")
 
 if __name__ == '__main__':
     main()
