@@ -455,8 +455,9 @@ def main():
             print("[WARN] Calibration skipped or failed. Continuing with generic/global model.")
         else:
             print("[INFO] Calibration complete. Proceeding to real-time MI prediction...")
-    # Always proceed to real-time MI prediction after calibration or model loading
-    # (The rest of the main function is the real-time MI prediction loop)
+
+    # --- Everything below here should ALWAYS run, regardless of calibration ---
+    # Model/scaler loading, LSL stream selection, MI feedback loop, etc.
     # Load artifact regressors from user config if available
     artifact_regressors = None
     config_path = os.path.join(USER_CONFIG_DIR, f'{user_id}_config.json')
