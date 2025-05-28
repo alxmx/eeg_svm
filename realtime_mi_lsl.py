@@ -485,6 +485,25 @@ def main():
     mi_outlet = StreamOutlet(mi_info)
     print("MI output stream created as 'processed_MI'.\n")
 
+    # Ask user for MI calculation rate and transmission interval
+    try:
+        mi_calc_rate_input = input("Enter MI calculation rate in Hz (default 10): ").strip()
+        if mi_calc_rate_input == '':
+            MI_CALC_RATE = 10
+        else:
+            MI_CALC_RATE = float(mi_calc_rate_input)
+    except Exception:
+        MI_CALC_RATE = 10
+    try:
+        mi_update_interval_input = input("Enter MI transmission interval in seconds (default 3): ").strip()
+        if mi_update_interval_input == '':
+            MI_UPDATE_INTERVAL = 3.0
+        else:
+            MI_UPDATE_INTERVAL = float(mi_update_interval_input)
+    except Exception:
+        MI_UPDATE_INTERVAL = 3.0
+    print(f"[INFO] MI will be calculated at {MI_CALC_RATE} Hz and pushed to LSL every {MI_UPDATE_INTERVAL} seconds (mean MI over interval).\n")
+
     visualizer = OnlineVisualizer()
     EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
     WINDOW_SIZE = 3 * 250  # 3 seconds at 250 Hz
@@ -513,9 +532,15 @@ def main():
     t.start()
     last_push_time = time.time()
     mi_buffer = []
-    MI_UPDATE_INTERVAL = 3.0  # seconds
-    MI_CALC_RATE = 10  # Hz
+    mi_records = []  # To store MI, timestamp, and state
+    next_calc_time = time.time()
+    print(f"Entering real-time MI prediction loop at {MI_CALC_RATE} Hz. Classification window: 3 seconds.\n")
     while not stop_flag['stop']:
+        now = time.time()
+        if now < next_calc_time:
+            time.sleep(max(0, next_calc_time - now))
+            continue
+        next_calc_time += 1.0 / MI_CALC_RATE
         if eeg_inlet is not None:
             eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
             eeg = np.array(eeg_sample[:8])
@@ -537,7 +562,7 @@ def main():
             EEG_BUFFER = EEG_BUFFER[-WINDOW_SIZE:]
             EDA_BUFFER = EDA_BUFFER[-WINDOW_SIZE:]
             TS_BUFFER = TS_BUFFER[-WINDOW_SIZE:]
-        # Run classification every 3 seconds (when buffer is full)
+        # Run MI calculation at MI_CALC_RATE
         if len(EEG_BUFFER) == WINDOW_SIZE:
             eeg_win = np.array(EEG_BUFFER)
             eda_win = np.array(EDA_BUFFER)
@@ -552,30 +577,30 @@ def main():
             x_scaled = scaler.transform(sample)
             if np.isnan(x_scaled).any():
                 print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
-                mi_pred = 0.0  # or np.nan, or previous MI value
+                mi_pred = 0.0
             else:
-                mi_pred = svr.predict(x_scaled)[0]  # Use only the user-specific model/scaler
-            ts = TS_BUFFER[-1]  # Use LSL timestamp of last sample in window
-            if mi_pred >= 0.5:
-                state = "Focused"
-            elif mi_pred >= 0.37:
-                state = "Neutral"
-            else:
-                state = "Unfocused"
-            print(f"Predicted MI: {mi_pred:.3f} | State: {state} (pushed to processed_MI stream)")
-            mi_outlet.push_sample([mi_pred], ts)
+                mi_pred = svr.predict(x_scaled)[0]
             mi_buffer.append(mi_pred)
-            last_push_time = ts
-            if len(mi_buffer) > ONLINE_UPDATE_WINDOW:
-                mi_buffer.pop(0)
+            # Only push to LSL at MI_UPDATE_INTERVAL
+            if (now - last_push_time) >= MI_UPDATE_INTERVAL:
+                mean_mi = float(np.mean(mi_buffer)) if mi_buffer else 0.0
+                ts = TS_BUFFER[-1]
+                if mean_mi >= 0.5:
+                    state = "Focused"
+                elif mean_mi >= 0.37:
+                    state = "Neutral"
+                else:
+                    state = "Unfocused"
+                print(f"Pushed mean MI: {mean_mi:.3f} | State: {state} (to processed_MI stream)")
+                mi_outlet.push_sample([mean_mi], ts)
+                mi_records.append({'mi': mean_mi, 'timestamp': ts, 'state': state})
+                mi_buffer = []
+                last_push_time = now
             label, label_ts = label_inlet.pull_sample(timeout=0.01)
-            # Online adaptation is disabled: just log label for offline retraining
             if label:
                 visualizer.update(mi_pred, float(label[0]))
             else:
                 visualizer.update(mi_pred)
-            # Wait for next window (3 seconds)
-            time.sleep(3)
     # --- After session: Save MI CSV and print report ---
     session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
