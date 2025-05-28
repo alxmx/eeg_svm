@@ -453,6 +453,10 @@ def main():
         baseline_csv, config_path = calibrate_user(user_id, calibration_duration_sec=calibration_duration)
         if baseline_csv is None:
             print("[WARN] Calibration skipped or failed. Continuing with generic/global model.")
+        else:
+            print("[INFO] Calibration complete. Proceeding to real-time MI prediction...")
+    # Always proceed to real-time MI prediction after calibration or model loading
+    # (The rest of the main function is the real-time MI prediction loop)
     # Load artifact regressors from user config if available
     artifact_regressors = None
     config_path = os.path.join(USER_CONFIG_DIR, f'{user_id}_config.json')
