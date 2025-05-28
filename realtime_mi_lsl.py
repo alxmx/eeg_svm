@@ -511,6 +511,10 @@ def main():
     t = threading.Thread(target=wait_for_exit)
     t.daemon = True
     t.start()
+    last_push_time = time.time()
+    mi_buffer = []
+    MI_UPDATE_INTERVAL = 3.0  # seconds
+    MI_CALC_RATE = 10  # Hz
     while not stop_flag['stop']:
         if eeg_inlet is not None:
             eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
@@ -560,10 +564,10 @@ def main():
                 state = "Unfocused"
             print(f"Predicted MI: {mi_pred:.3f} | State: {state} (pushed to processed_MI stream)")
             mi_outlet.push_sample([mi_pred], ts)
-            mi_window.append(mi_pred)
-            mi_records.append({'timestamp': ts, 'mi': mi_pred, 'state': state})
-            if len(mi_window) > ONLINE_UPDATE_WINDOW:
-                mi_window.pop(0)
+            mi_buffer.append(mi_pred)
+            last_push_time = ts
+            if len(mi_buffer) > ONLINE_UPDATE_WINDOW:
+                mi_buffer.pop(0)
             label, label_ts = label_inlet.pull_sample(timeout=0.01)
             # Online adaptation is disabled: just log label for offline retraining
             if label:
