@@ -116,40 +116,47 @@ def load_or_train_models():
         svr, scaler = train_and_save_models()
     return svr, scaler
 
-def select_lsl_stream(stream_type, name_hint=None, allow_skip=False):
+def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=True):
     from pylsl import resolve_streams
-    print(f"Searching for available LSL streams of type '{stream_type}'...")
+    if confirm:
+        print(f"Searching for available LSL streams of type '{stream_type}'...")
     streams = resolve_streams()
     if not streams:
         if allow_skip:
-            print(f"No LSL streams found for type '{stream_type}'. You may skip this sensor.")
+            if confirm:
+                print(f"No LSL streams found for type '{stream_type}'. You may skip this sensor.")
             skip = input(f"Type 'skip' to continue without {stream_type}, or press Enter to retry: ").strip().lower()
             if skip == 'skip':
                 return None
             else:
-                return select_lsl_stream(stream_type, name_hint, allow_skip)
+                return select_lsl_stream(stream_type, name_hint, allow_skip, confirm)
         else:
             raise RuntimeError("No LSL streams found on the network.")
-    print("Available streams:")
-    for idx, s in enumerate(streams):
-        print(f"[{idx}] Name: {s.name()} | Type: {s.type()} | Channels: {s.channel_count()} | Source ID: {s.source_id()}")
-    if allow_skip:
-        print(f"[{len(streams)}] SKIP this sensor and use generic model/scaler")
+    if confirm:
+        print("Available streams:")
+        for idx, s in enumerate(streams):
+            print(f"[{idx}] Name: {s.name()} | Type: {s.type()} | Channels: {s.channel_count()} | Source ID: {s.source_id()}")
+        if allow_skip:
+            print(f"[{len(streams)}] SKIP this sensor and use generic model/scaler")
     while True:
         try:
             sel = input(f"Select the stream index for {stream_type}: ")
             if allow_skip and sel.strip() == str(len(streams)):
-                print(f"[SKIP] Skipping {stream_type} stream selection. Will use generic model/scaler.")
+                if confirm:
+                    print(f"[SKIP] Skipping {stream_type} stream selection. Will use generic model/scaler.")
                 return None
             sel = int(sel)
             if 0 <= sel < len(streams):
                 chosen = streams[sel]
-                print(f"[CONFIRM] Selected stream: Name='{chosen.name()}', Type='{chosen.type()}', Channels={chosen.channel_count()}, Source ID='{chosen.source_id()}'\n")
+                if confirm:
+                    print(f"[CONFIRM] Selected stream: Name='{chosen.name()}', Type='{chosen.type()}', Channels={chosen.channel_count()}, Source ID='{chosen.source_id()}'\n")
                 return chosen
             else:
-                print(f"Invalid index. Please enter a number between 0 and {len(streams)-1} (or {len(streams)} to skip if available).")
+                if confirm:
+                    print(f"Invalid index. Please enter a number between 0 and {len(streams)-1} (or {len(streams)} to skip if available).")
         except ValueError:
-            print("Invalid input. Please enter a valid integer index.")
+            if confirm:
+                print("Invalid input. Please enter a valid integer index.")
 
 def calibrate_user(user_id, calibration_duration_sec=60):
     """
@@ -391,7 +398,7 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
     # Step 3: LSL setup
     feature_stream = select_lsl_stream('Features')
     feature_inlet = StreamInlet(feature_stream)
-    label_stream = select_lsl_stream('UnityMarkers')
+    label_stream = select_lsl_stream('UnityMarkers', confirm=False)
     label_inlet = StreamInlet(label_stream)
     mi_info = StreamInfo('MI_Output', 'MI', 1, 10, 'float32', 'mi_stream')
     mi_outlet = StreamOutlet(mi_info)
@@ -484,7 +491,7 @@ def main():
         eda_inlet = None
         print("EDA stream skipped. Will use generic model/scaler.")
     print("Resolving Unity label stream (type='UnityMarkers')...")
-    label_stream = select_lsl_stream('UnityMarkers')
+    label_stream = select_lsl_stream('UnityMarkers', confirm=False)
     label_inlet = StreamInlet(label_stream)
     print("Unity label stream connected.")
     print("Creating MI output LSL stream (type='processed_MI')...")
