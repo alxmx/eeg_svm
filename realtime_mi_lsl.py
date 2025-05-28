@@ -34,6 +34,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import json
 import time
+import scipy.signal
 
 # --- CONFIG ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -216,10 +217,21 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         eda_samples.append(eda)
         ts_samples.append(eeg_ts)  # Use EEG timestamp as reference
         # Feature extraction placeholder (replace with your method)
-        theta_fz = np.mean(eeg)
-        alpha_po = np.mean(eeg)
-        faa = np.mean(eeg)
-        beta_frontal = np.mean(eeg)
+        # theta_fz = np.mean(eeg)
+        # alpha_po = np.mean(eeg)
+        # faa = np.mean(eeg)
+        # beta_frontal = np.mean(eeg)
+        # eda_norm = np.mean(eda)
+        # features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+        # processed_outlet.push_sample(features, eeg_ts)
+        # Instead, use real features:
+        # Assume EEG channels: [Fz, Cz, Pz, Oz, C3, C4, PO7, PO8] (adjust as needed)
+        eeg_arr = np.array(eeg)
+        sf = 250
+        theta_fz = compute_bandpower(eeg_arr[0], sf, (4,8))  # Fz
+        alpha_po = (compute_bandpower(eeg_arr[6], sf, (8,13)) + compute_bandpower(eeg_arr[7], sf, (8,13))) / 2  # PO7, PO8
+        faa = np.log(compute_bandpower(eeg_arr[4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_arr[5], sf, (8,13)) + 1e-8)  # C3 - C4
+        beta_frontal = compute_bandpower(eeg_arr[0], sf, (13,30))  # Fz
         eda_norm = np.mean(eda)
         features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
         processed_outlet.push_sample(features, eeg_ts)
@@ -600,13 +612,13 @@ def main():
             eeg_win = np.array(EEG_BUFFER)
             eda_win = np.array(EDA_BUFFER)
             # Feature extraction placeholder (replace with your method)
-            theta_fz = np.mean(eeg_win)
-            alpha_po = np.mean(eeg_win)
-            faa = np.mean(eeg_win)
-            beta_frontal = np.mean(eeg_win)
-            eda_norm = np.mean(eda_win)
-            features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-            sample = np.array(features).reshape(1, -1)
+            # theta_fz = np.mean(eeg_win)
+            # alpha_po = np.mean(eeg_win)
+            # faa = np.mean(eeg_win)
+            # beta_frontal = np.mean(eeg_win)
+            # eda_norm = np.mean(eda_win)
+            # features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+            # sample = np.array(features).reshape(1, -1)
             # Warn if features are all zeros, all NaN, or constant
             if np.all(np.isnan(sample)):
                 print("[WARN] All features are NaN. Skipping MI prediction for this window.")
@@ -654,7 +666,12 @@ def main():
                 last_push_time = now
             label, label_ts = label_inlet.pull_sample(timeout=0.01)
             if label:
-                visualizer.update(mi_pred, float(label[0]))
+                try:
+                    label_val = float(label[0])
+                    visualizer.update(mi_pred, label_val)
+                except (ValueError, TypeError):
+                    # Non-numeric label, skip updating label history
+                    visualizer.update(mi_pred, None)
             else:
                 visualizer.update(mi_pred)
     # --- After session: Save MI CSV and print report ---
@@ -741,6 +758,45 @@ def apply_artifact_regression(eeg, acc_gyr, artifact_regressors):
         else:
             eeg_clean[ch] = eeg[ch]
     return eeg_clean
+
+def compute_bandpower(data, sf, band, window_sec=None, relative=False):
+    """
+    Compute the average power of the signal x in a specific frequency band.
+    data: 1D numpy array (samples,)
+    sf: float, sampling frequency
+    band: tuple, (low, high)
+    window_sec: float or None
+    relative: bool, return relative power
+    """
+    band = np.asarray(band)
+    low, high = band
+    if window_sec is not None:
+        nperseg = int(window_sec * sf)
+    else:
+        nperseg = min(256, len(data))
+    freqs, psd = scipy.signal.welch(data, sf, nperseg=nperseg)
+    freq_res = freqs[1] - freqs[0]
+    idx_band = np.logical_and(freqs >= low, freqs <= high)
+    bp = np.trapz(psd[idx_band], dx=freq_res)
+    if relative:
+        bp /= np.trapz(psd, dx=freq_res)
+    return bp
+
+def resample_eda(eda_buffer, eda_timestamps, target_timestamps):
+    """
+    Resample/interpolate EDA to match target timestamps (EEG timestamps).
+    eda_buffer: list of [2,] arrays
+    eda_timestamps: list of floats
+    target_timestamps: list of floats (EEG timestamps)
+    Returns: np.array of shape (len(target_timestamps), 2)
+    """
+    eda_buffer = np.array(eda_buffer)
+    eda_timestamps = np.array(eda_timestamps)
+    target_timestamps = np.array(target_timestamps)
+    eda_resampled = np.zeros((len(target_timestamps), 2))
+    for ch in range(2):
+        eda_resampled[:, ch] = np.interp(target_timestamps, eda_timestamps, eda_buffer[:, ch])
+    return eda_resampled
 
 if __name__ == "__main__":
     main()
