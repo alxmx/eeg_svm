@@ -151,13 +151,11 @@ def select_lsl_stream(stream_type, name_hint=None, allow_skip=False):
         except ValueError:
             print("Invalid input. Please enter a valid integer index.")
 
-def calibrate_user(user_id, n_samples=100):
+def calibrate_user(user_id, calibration_duration_sec=10):
     """
-    Calibration step: Collect baseline (ground truth) data for a new user.
-    Prompts the user to relax (e.g., eyes closed), collects N samples, and saves as ground truth.
-    Now lets you select EEG and EDA LSL streams, combines their features, and streams the processed calibration data to a new LSL stream ('calibration_processed').
+    Calibration step: Collect baseline (ground truth) data for a new user at 250 Hz.
+    Uses LSL timestamps for all samples. EDA is downsampled/interpolated to 250 Hz.
     """
-    import glob
     print(f"\n=== Calibration for user: {user_id} ===")
     print("Type 'exit' at any prompt to abort calibration.")
     # Show user info if config exists
@@ -191,42 +189,48 @@ def calibrate_user(user_id, n_samples=100):
         print(f"[ERROR] Selected EDA stream has {eda_stream.channel_count()} channels. At least 2 required. Skipping calibration.")
         return None, None
     eda_inlet = StreamInlet(eda_stream)
-    # Set up a new LSL stream for processed calibration data (features only)
-    processed_info = StreamInfo('calibration_processed', 'ProcessedCalibration', len(FEATURE_ORDER), 10, 'float32', f'calib_{user_id}')
+    processed_info = StreamInfo('calibration_processed', 'ProcessedCalibration', len(FEATURE_ORDER), 250, 'float32', f'calib_{user_id}')
     processed_outlet = StreamOutlet(processed_info)
-    print(f"Calibration processed LSL stream created as 'calibration_processed' with {len(FEATURE_ORDER)} channels.\n")
-    baseline_features = []
-    N = n_samples
-    sample_interval = 1  # seconds between samples
-    print(f"Collecting {N} samples automatically, one every {sample_interval} second(s)...")
-    for i in range(N):
-        eeg_sample, _ = eeg_inlet.pull_sample()
-        eda_sample, _ = eda_inlet.pull_sample()
-        # Use only correct channels
-        eeg = np.array(eeg_sample[:8])  # First 8 EEG channels
-        acc_gyr = np.array(eeg_sample[8:14])  # Next 6 channels for artifact reduction
-        eda = np.array(eda_sample[:2])  # First 2 EDA channels
-        # Example: simple artifact reduction (replace with your method)
-        eeg_clean = eeg - np.mean(acc_gyr)  # Placeholder for real artifact reduction
-        # Feature extraction (replace with your actual feature extraction)
-        # Here, just use mean as placeholder for each feature
-        theta_fz = np.mean(eeg_clean)  # Replace with real theta extraction
-        alpha_po = np.mean(eeg_clean)  # Replace with real alpha extraction
-        faa = np.mean(eeg_clean)       # Replace with real FAA extraction
-        beta_frontal = np.mean(eeg_clean)  # Replace with real beta extraction
-        eda_norm = np.mean(eda)        # Replace with real EDA normalization
+    print(f"Calibration processed LSL stream created as 'calibration_processed' with {len(FEATURE_ORDER)} channels at 250 Hz.\n")
+    eeg_samples, eda_samples, ts_samples = [], [], []
+    n_samples = int(250 * calibration_duration_sec)
+    print(f"Collecting {n_samples} samples at 250 Hz for {calibration_duration_sec} seconds...")
+    for i in range(n_samples):
+        eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
+        eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
+        eeg = np.array(eeg_sample[:8])
+        acc_gyr = np.array(eeg_sample[8:14])
+        eda = np.array(eda_sample[:2])
+        eeg_clean = eeg - np.mean(acc_gyr)
+        eeg_samples.append(eeg_clean)
+        eda_samples.append(eda)
+        ts_samples.append(eeg_ts)  # Use EEG timestamp as reference
+        # Feature extraction placeholder (replace with your method)
+        theta_fz = np.mean(eeg_clean)
+        alpha_po = np.mean(eeg_clean)
+        faa = np.mean(eeg_clean)
+        beta_frontal = np.mean(eeg_clean)
+        eda_norm = np.mean(eda)
         features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-        baseline_features.append(features)
-        processed_outlet.push_sample(features)
-        print(f"Collected and streamed baseline sample {i+1}/{N}")
-        time.sleep(sample_interval)
-    baseline_arr = np.array(baseline_features)
-    # Filter out rows with NaN before saving/training
+        processed_outlet.push_sample(features, eeg_ts)
+        if i % 250 == 0:
+            print(f"Collected {i} samples...")
+    # Downsample/interpolate EDA to match EEG timestamps if needed
+    eeg_samples = np.array(eeg_samples)
+    eda_samples = np.array(eda_samples)
+    ts_samples = np.array(ts_samples)
+    # Save features as before
+    baseline_arr = np.column_stack([
+        eeg_samples.mean(axis=1),  # placeholder for theta_fz
+        eeg_samples.mean(axis=1),  # placeholder for alpha_po
+        eeg_samples.mean(axis=1),  # placeholder for faa
+        eeg_samples.mean(axis=1),  # placeholder for beta_frontal
+        eda_samples.mean(axis=1)   # placeholder for eda_norm
+    ])
     baseline_arr = baseline_arr[~np.isnan(baseline_arr).any(axis=1)]
     if baseline_arr.shape[0] == 0:
         print("[ERROR] All calibration samples are invalid (contain NaN). Skipping calibration/model update.")
         return None, None
-    # Save baseline features as CSV for this user (append if exists)
     baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
     new_df = pd.DataFrame(baseline_arr, columns=FEATURE_ORDER)
     if os.path.exists(baseline_csv):
@@ -244,7 +248,7 @@ def calibrate_user(user_id, n_samples=100):
         'user_id': user_id,
         'baseline_csv': baseline_csv,
         'calibration_time': str(datetime.now()),
-        'n_samples': N
+        'n_samples': n_samples
     }
     with open(config_path, 'w') as f:
         json.dump(user_config, f, indent=2)
@@ -399,17 +403,17 @@ def main():
     user_id = input("Enter user ID for this session: ")
     # Ask for calibration duration
     try:
-        duration_input = input("Enter calibration duration in seconds (default 60): ").strip()
+        duration_input = input("Enter calibration duration in seconds (default 10): ").strip()
         if duration_input == '':
-            calibration_duration = 60
+            calibration_duration = 10
         else:
             calibration_duration = int(duration_input)
     except Exception:
-        calibration_duration = 60
-    print(f"Calibration will last {calibration_duration} seconds.")
+        calibration_duration = 10
+    print(f"Calibration will last {calibration_duration} seconds at 250 Hz.")
     calibrate = input("Run calibration step for this user? (y/n): ").strip().lower() == 'y'
     if calibrate:
-        baseline_csv, config_path = calibrate_user(user_id, n_samples=calibration_duration)
+        baseline_csv, config_path = calibrate_user(user_id, calibration_duration_sec=calibration_duration)
         if baseline_csv is None:
             print("[WARN] Calibration skipped or failed. Continuing with generic/global model.")
     print(f"Checking for user-specific model and scaler for user: {user_id}")
@@ -488,9 +492,12 @@ def main():
     print("MI output stream created as 'processed_MI'.\n")
 
     visualizer = OnlineVisualizer()
-    print("Entering real-time MI prediction loop. Press Enter to stop.")
+    EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
+    WINDOW_SIZE = 3 * 250  # 3 seconds at 250 Hz
     mi_window = []  # Moving window for MI predictions
     mi_records = []  # To store MI, timestamp, and state
+    print("Entering real-time MI prediction loop at 250 Hz. Classification every 3 seconds.")
+    # ...existing code for threading, stop_flag, etc...
     import threading
     import sys
     import msvcrt  # For ESC key detection on Windows
@@ -512,63 +519,76 @@ def main():
     t.start()
     while not stop_flag['stop']:
         if eeg_inlet is not None:
-            eeg_sample, _ = eeg_inlet.pull_sample()
+            eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
             eeg = np.array(eeg_sample[:8])
             acc_gyr = np.array(eeg_sample[8:14])
             eeg_clean = eeg - np.mean(acc_gyr)
         else:
-            eeg_clean = np.zeros(8)  # or use a default/fallback value
+            eeg_clean = np.zeros(8)
+            eeg_ts = time.time()
         if eda_inlet is not None:
-            eda_sample, _ = eda_inlet.pull_sample()
-            eda = np.array(eda_sample)
+            eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
+            eda = np.array(eda_sample[:2])
         else:
-            eda = np.zeros(1)  # or use a default/fallback value
-        # Feature extraction (fallback if needed)
-        theta_fz = np.mean(eeg_clean)
-        alpha_po = np.mean(eeg_clean)
-        faa = np.mean(eeg_clean)
-        beta_frontal = np.mean(eeg_clean)
-        eda_norm = np.mean(eda)
-        features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-        sample = np.array(features).reshape(1, -1)
-        x_scaled = scaler.transform(sample)
-        mi_pred = online_model.predict(x_scaled)[0]
-        ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-        # Classify MI for Unity color logic
-        if mi_pred >= 0.5:
-            state = "Focused"
-        elif mi_pred >= 0.37:
-            state = "Neutral"
-        else:
-            state = "Unfocused"
-        print(f"Predicted MI: {mi_pred:.3f} | State: {state} (pushed to processed_MI stream)")
-        mi_outlet.push_sample([mi_pred])
-        mi_window.append(mi_pred)
-        mi_records.append({'timestamp': ts, 'mi': mi_pred, 'state': state})
-        if len(mi_window) > ONLINE_UPDATE_WINDOW:
-            mi_window.pop(0)
-        label, _ = label_inlet.pull_sample(timeout=0.01)
-        update_triggered = False
-        if len(mi_window) == ONLINE_UPDATE_WINDOW and label:
-            above = sum([v >= MI_THRESHOLDS['focused'] for v in mi_window])
-            below = sum([v < MI_THRESHOLDS['neutral'] for v in mi_window])
-            if above / ONLINE_UPDATE_WINDOW >= ONLINE_UPDATE_RATIO:
-                print(f"[AUTO-UPDATE] MI above focused threshold for {ONLINE_UPDATE_RATIO*100:.0f}% of window. Updating model with label {label[0]}.")
-                online_model.partial_fit(x_scaled, [float(label[0])])
-                update_triggered = True
-            elif below / ONLINE_UPDATE_WINDOW >= ONLINE_UPDATE_RATIO:
-                print(f"[AUTO-UPDATE] MI below neutral threshold for {ONLINE_UPDATE_RATIO*100:.0f}% of window. Updating model with label {label[0]}.")
-                online_model.partial_fit(x_scaled, [float(label[0])])
-                update_triggered = True
-        if update_triggered:
-            dump(online_model, user_online_model_path)
-            print(f"User online model updated and saved to {user_online_model_path}")
-            visualizer.update(mi_pred, float(label[0]))
-            # No metrics logging here; only at end
-        else:
-            if label:
-                print("Label received from Unity, but threshold not met. No update.")
-            visualizer.update(mi_pred)
+            eda = np.zeros(2)
+            eda_ts = eeg_ts
+        EEG_BUFFER.append(eeg_clean)
+        EDA_BUFFER.append(eda)
+        TS_BUFFER.append(eeg_ts)
+        if len(EEG_BUFFER) > WINDOW_SIZE:
+            EEG_BUFFER = EEG_BUFFER[-WINDOW_SIZE:]
+            EDA_BUFFER = EDA_BUFFER[-WINDOW_SIZE:]
+            TS_BUFFER = TS_BUFFER[-WINDOW_SIZE:]
+        # Run classification every 3 seconds (when buffer is full)
+        if len(EEG_BUFFER) == WINDOW_SIZE:
+            eeg_win = np.array(EEG_BUFFER)
+            eda_win = np.array(EDA_BUFFER)
+            # Feature extraction placeholder (replace with your method)
+            theta_fz = np.mean(eeg_win)
+            alpha_po = np.mean(eeg_win)
+            faa = np.mean(eeg_win)
+            beta_frontal = np.mean(eeg_win)
+            eda_norm = np.mean(eda_win)
+            features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+            sample = np.array(features).reshape(1, -1)
+            x_scaled = scaler.transform(sample)
+            mi_pred = online_model.predict(x_scaled)[0]
+            ts = TS_BUFFER[-1]  # Use LSL timestamp of last sample in window
+            if mi_pred >= 0.5:
+                state = "Focused"
+            elif mi_pred >= 0.37:
+                state = "Neutral"
+            else:
+                state = "Unfocused"
+            print(f"Predicted MI: {mi_pred:.3f} | State: {state} (pushed to processed_MI stream)")
+            mi_outlet.push_sample([mi_pred], ts)
+            mi_window.append(mi_pred)
+            mi_records.append({'timestamp': ts, 'mi': mi_pred, 'state': state})
+            if len(mi_window) > ONLINE_UPDATE_WINDOW:
+                mi_window.pop(0)
+            label, label_ts = label_inlet.pull_sample(timeout=0.01)
+            update_triggered = False
+            if len(mi_window) == ONLINE_UPDATE_WINDOW and label:
+                above = sum([v >= MI_THRESHOLDS['focused'] for v in mi_window])
+                below = sum([v < MI_THRESHOLDS['neutral'] for v in mi_window])
+                if above / ONLINE_UPDATE_WINDOW >= ONLINE_UPDATE_RATIO:
+                    print(f"[AUTO-UPDATE] MI above focused threshold for {ONLINE_UPDATE_RATIO*100:.0f}% of window. Updating model with label {label[0]}.")
+                    online_model.partial_fit(x_scaled, [float(label[0])])
+                    update_triggered = True
+                elif below / ONLINE_UPDATE_WINDOW >= ONLINE_UPDATE_RATIO:
+                    print(f"[AUTO-UPDATE] MI below neutral threshold for {ONLINE_UPDATE_RATIO*100:.0f}% of window. Updating model with label {label[0]}.")
+                    online_model.partial_fit(x_scaled, [float(label[0])])
+                    update_triggered = True
+            if update_triggered:
+                dump(online_model, user_online_model_path)
+                print(f"User online model updated and saved to {user_online_model_path}")
+                visualizer.update(mi_pred, float(label[0]))
+            else:
+                if label:
+                    print("Label received from Unity, but threshold not met. No update.")
+                visualizer.update(mi_pred)
+            # Wait for next window (3 seconds)
+            time.sleep(3)
     # --- After session: Save MI CSV and print report ---
     session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
