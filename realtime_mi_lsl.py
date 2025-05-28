@@ -69,6 +69,8 @@ def bin_mi(mi):
 def calculate_mi(features):
     weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
     raw_mi = np.dot(features, weights) - 1
+    # Clip raw_mi to avoid overflow in exp
+    raw_mi = np.clip(raw_mi, -50, 50)
     mi = 1 / (1 + np.exp(-raw_mi))
     return mi
 
@@ -527,7 +529,65 @@ def main():
     mi_window = []  # Moving window for MI predictions
     mi_records = []  # To store MI, timestamp, and state
     print("Entering real-time MI prediction loop at 250 Hz. Classification every 3 seconds.")
-    # ...existing code for threading, stop_flag, etc...
+    # --- Automatic input data analysis and adaptation ---
+    eeg_scale_factor = 1.0
+    eda_scale_factor = 1.0
+    if eeg_inlet is not None or eda_inlet is not None:
+        print("\n[INFO] Running automatic input data analysis for EEG/EDA streams...")
+        # Analyze and adapt scaling if needed
+        eeg_vals = []
+        eda_vals = []
+        n_samples = 500
+        for _ in range(n_samples):
+            if eeg_inlet is not None:
+                eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.5)
+                if eeg_sample is not None:
+                    eeg_vals.append(np.array(eeg_sample[:8]))
+            if eda_inlet is not None:
+                eda_sample, _ = eda_inlet.pull_sample(timeout=0.5)
+                if eda_sample is not None:
+                    eda_vals.append(np.array(eda_sample[:2]))
+        if eeg_vals:
+            eeg_arr = np.vstack(eeg_vals)
+            print("\n[EEG RAW DATA ANALYSIS]")
+            print(f"  Shape: {eeg_arr.shape}")
+            print(f"  Min: {np.min(eeg_arr):.3f}, Max: {np.max(eeg_arr):.3f}, Mean: {np.mean(eeg_arr):.3f}, Std: {np.std(eeg_arr):.3f}")
+            if np.issubdtype(eeg_arr.dtype, np.integer):
+                print("  [WARN] EEG data appears to be integer. RAW (unconverted, unnormalized) EEG is expected.")
+            if np.nanmax(np.abs(eeg_arr)) < 1.0:
+                print("  [WARN] EEG data values are very small (<1.0). Will scale EEG by 1000 for feature extraction.")
+                eeg_scale_factor = 1000.0
+            elif np.nanmax(np.abs(eeg_arr)) > 1000:
+                print("  [WARN] EEG data values are very large (>1000). Will scale EEG by 0.001 for feature extraction.")
+                eeg_scale_factor = 0.001
+        if eda_vals:
+            eda_arr = np.vstack(eda_vals)
+            print("\n[EDA RAW DATA ANALYSIS]")
+            print(f"  Shape: {eda_arr.shape}")
+            print(f"  Min: {np.min(eda_arr):.5f}, Max: {np.max(eda_arr):.5f}, Mean: {np.mean(eda_arr):.5f}, Std: {np.std(eda_arr):.5f}")
+            if np.issubdtype(eda_arr.dtype, np.integer):
+                print("  [WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
+            if np.nanmax(np.abs(eda_arr)) < 0.01:
+                print("  [WARN] EDA data values are very small (<0.01). Will scale EDA by 100 for feature extraction.")
+                eda_scale_factor = 100.0
+            elif np.nanmax(np.abs(eda_arr)) > 10:
+                print("  [WARN] EDA data values are very large (>10). Will scale EDA by 0.1 for feature extraction.")
+                eda_scale_factor = 0.1
+        print(f"[INFO] EEG scale factor: {eeg_scale_factor}, EDA scale factor: {eda_scale_factor}\n")
+
+    # In the real-time MI prediction loop, apply scaling before feature extraction
+    # Replace in the loop:
+    # eeg = np.array(eeg_sample[:8])
+    # ...
+    # eda = np.array(eda_sample[:2])
+    # ...
+    # With:
+    # eeg = np.array(eeg_sample[:8]) * eeg_scale_factor
+    # ...
+    # eda = np.array(eda_sample[:2]) * eda_scale_factor
+    # ...
+    # (Apply this in both calibration and real-time prediction)
+
     import threading
     import sys
     import msvcrt  # For ESC key detection on Windows
@@ -560,7 +620,7 @@ def main():
         next_calc_time += 1.0 / MI_CALC_RATE
         if eeg_inlet is not None:
             eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
-            eeg = np.array(eeg_sample[:8])
+            eeg = np.array(eeg_sample[:8]) * eeg_scale_factor
             acc_gyr = np.array(eeg_sample[8:14])
             # --- RAW DATA CHECK ---
             if np.issubdtype(eeg.dtype, np.integer):
@@ -576,7 +636,7 @@ def main():
             eeg_ts = time.time()
         if eda_inlet is not None:
             eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
-            eda = np.array(eda_sample[:2])
+            eda = np.array(eda_sample[:2]) * eda_scale_factor
             # --- RAW DATA CHECK ---
             if np.issubdtype(eda.dtype, np.integer):
                 print("[WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
@@ -596,14 +656,18 @@ def main():
         if len(EEG_BUFFER) == WINDOW_SIZE:
             eeg_win = np.array(EEG_BUFFER)
             eda_win = np.array(EDA_BUFFER)
-            # Feature extraction placeholder (replace with your method)
-            # theta_fz = np.mean(eeg_win)
-            # alpha_po = np.mean(eeg_win)
-            # faa = np.mean(eeg_win)
-            # beta_frontal = np.mean(eeg_win)
-            # eda_norm = np.mean(eda_win)
-            # features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-            # sample = np.array(features).reshape(1, -1)
+            # --- Apply scaling factors determined from input analysis ---
+            eeg_win = eeg_win * eeg_scale_factor
+            eda_win = eda_win * eda_scale_factor
+            # --- Feature extraction (windowed, real) ---
+            sf = 250
+            theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))  # Fz
+            alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2  # PO7, PO8
+            faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)  # C3 - C4
+            beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))  # Fz
+            eda_norm = np.mean(eda_win)
+            features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+            sample = np.array(features).reshape(1, -1)
             # Warn if features are all zeros, all NaN, or constant
             if np.all(np.isnan(sample)):
                 print("[WARN] All features are NaN. Skipping MI prediction for this window.")
@@ -782,6 +846,42 @@ def resample_eda(eda_buffer, eda_timestamps, target_timestamps):
     for ch in range(2):
         eda_resampled[:, ch] = np.interp(target_timestamps, eda_timestamps, eda_buffer[:, ch])
     return eda_resampled
+
+# --- Analyze input EEG and EDA ranges at the start ---
+def analyze_input_streams(eeg_inlet, eda_inlet, n_samples=500):
+    eeg_vals = []
+    eda_vals = []
+    for _ in range(n_samples):
+        if eeg_inlet is not None:
+            eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.5)
+            if eeg_sample is not None:
+                eeg_vals.append(np.array(eeg_sample[:8]))
+        if eda_inlet is not None:
+            eda_sample, _ = eda_inlet.pull_sample(timeout=0.5)
+            if eda_sample is not None:
+                eda_vals.append(np.array(eda_sample[:2]))
+    if eeg_vals:
+        eeg_arr = np.vstack(eeg_vals)
+        print("\n[EEG RAW DATA ANALYSIS]")
+        print(f"  Shape: {eeg_arr.shape}")
+        print(f"  Min: {np.min(eeg_arr):.3f}, Max: {np.max(eeg_arr):.3f}, Mean: {np.mean(eeg_arr):.3f}, Std: {np.std(eeg_arr):.3f}")
+        if np.issubdtype(eeg_arr.dtype, np.integer):
+            print("  [WARN] EEG data appears to be integer. RAW (unconverted, unnormalized) EEG is expected.")
+        if np.nanmax(np.abs(eeg_arr)) < 1.0:
+            print("  [WARN] EEG data values are very small (<1.0). RAW EEG is expected. Check your LSL stream.")
+        if np.nanmax(np.abs(eeg_arr)) > 1000:
+            print("  [WARN] EEG data values are very large (>1000). Check for amplifier scaling or units.")
+    if eda_vals:
+        eda_arr = np.vstack(eda_vals)
+        print("\n[EDA RAW DATA ANALYSIS]")
+        print(f"  Shape: {eda_arr.shape}")
+        print(f"  Min: {np.min(eda_arr):.5f}, Max: {np.max(eda_arr):.5f}, Mean: {np.mean(eda_arr):.5f}, Std: {np.std(eda_arr):.5f}")
+        if np.issubdtype(eda_arr.dtype, np.integer):
+            print("  [WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
+        if np.nanmax(np.abs(eda_arr)) < 0.01:
+            print("  [WARN] EDA data values are very small (<0.01). RAW EDA is expected. Check your LSL stream.")
+        if np.nanmax(np.abs(eda_arr)) > 10:
+            print("  [WARN] EDA data values are very large (>10). Check for scaling or units.")
 
 if __name__ == "__main__":
     main()
