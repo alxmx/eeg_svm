@@ -1,6 +1,7 @@
 """
 Real-time Mindfulness Index (MI) LSL Pipeline
 
+- Expects RAW (unconverted, unnormalized) EEG and EDA data from LSL streams.
 - Loads existing SVM/SVR model and scaler if available, else trains from EEG/EDA data.
 - Sets up LSL streams for features (input), Unity labels (input), and MI output (output).
 - Uses SGDRegressor for online MI adaptation.
@@ -24,7 +25,7 @@ import numpy as np
 import pandas as pd
 from joblib import load, dump
 from pylsl import StreamInlet, StreamOutlet, StreamInfo, resolve_byprop
-from sklearn.linear_model import SGDRegressor
+from sklearn.linear_model import SGDRegressor, LinearRegression
 from sklearn.svm import SVR, SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
@@ -161,7 +162,9 @@ def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=Tru
 def calibrate_user(user_id, calibration_duration_sec=60):
     """
     Calibration step: Collect baseline (ground truth) data for a new user at 250 Hz.
+    Expects RAW EEG (first 8 channels) and RAW ACC/Gyro (next 6 channels), and RAW EDA (2 channels).
     Uses LSL timestamps for all samples. EDA is downsampled/interpolated to 250 Hz.
+    Also fits artifact regression models for each EEG channel using ACC/Gyro as regressors.
     """
     print(f"\n=== Calibration for user: {user_id} ===")
     print("Type 'exit' at any prompt to abort calibration.")
@@ -184,13 +187,13 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         print(f"Starting in {i}...", end='\r', flush=True)
         time.sleep(1)
     print("\nPlease relax (e.g., eyes closed) and remain still. Collecting baseline samples...")
-    print("Select the EEG LSL feature stream to use for calibration:")
+    print("Select the EEG LSL feature stream to use for calibration (must be RAW, unconverted EEG data):")
     eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream')
     if eeg_stream.channel_count() < 14:
         print(f"[ERROR] Selected EEG stream has {eeg_stream.channel_count()} channels. At least 14 (8 EEG + 6 ACC/Gyro) required. Skipping calibration.")
         return None, None
     eeg_inlet = StreamInlet(eeg_stream)
-    print("Select the EDA LSL feature stream to use for calibration:")
+    print("Select the EDA LSL feature stream to use for calibration (must be RAW, unconverted EDA data):")
     eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals')
     if eda_stream.channel_count() < 2:
         print(f"[ERROR] Selected EDA stream has {eda_stream.channel_count()} channels. At least 2 required. Skipping calibration.")
@@ -199,7 +202,7 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     processed_info = StreamInfo('calibration_processed', 'ProcessedCalibration', len(FEATURE_ORDER), 250, 'float32', f'calib_{user_id}')
     processed_outlet = StreamOutlet(processed_info)
     print(f"Calibration processed LSL stream created as 'calibration_processed' with {len(FEATURE_ORDER)} channels at 250 Hz.\n")
-    eeg_samples, eda_samples, ts_samples = [], [], []
+    eeg_samples, eda_samples, accgyr_samples, ts_samples = [], [], [], []
     n_samples = int(250 * calibration_duration_sec)
     print(f"Collecting {n_samples} samples at 250 Hz for {calibration_duration_sec} seconds...")
     for i in range(n_samples):
@@ -208,22 +211,23 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         eeg = np.array(eeg_sample[:8])
         acc_gyr = np.array(eeg_sample[8:14])
         eda = np.array(eda_sample[:2])
-        eeg_clean = eeg - np.mean(acc_gyr)
-        eeg_samples.append(eeg_clean)
+        eeg_samples.append(eeg)
+        accgyr_samples.append(acc_gyr)
         eda_samples.append(eda)
         ts_samples.append(eeg_ts)  # Use EEG timestamp as reference
         # Feature extraction placeholder (replace with your method)
-        theta_fz = np.mean(eeg_clean)
-        alpha_po = np.mean(eeg_clean)
-        faa = np.mean(eeg_clean)
-        beta_frontal = np.mean(eeg_clean)
+        theta_fz = np.mean(eeg)
+        alpha_po = np.mean(eeg)
+        faa = np.mean(eeg)
+        beta_frontal = np.mean(eeg)
         eda_norm = np.mean(eda)
         features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
         processed_outlet.push_sample(features, eeg_ts)
         if i % 250 == 0:
             print(f"Collected {i} samples...")
     # Downsample/interpolate EDA to match EEG timestamps if needed
-    eeg_samples = np.array(eeg_samples)
+    eeg_samples = np.array(eeg_samples)  # shape (n_samples, 8)
+    accgyr_samples = np.array(accgyr_samples)  # shape (n_samples, 6)
     eda_samples = np.array(eda_samples)
     ts_samples = np.array(ts_samples)
     # Save features as before
@@ -438,22 +442,24 @@ def main():
     print("\n==============================")
     print("REAL-TIME MI LSL PIPELINE STARTING")
     print("==============================\n")
+    print("[INFO] This script expects RAW (unconverted, unnormalized) EEG and EDA data from LSL streams.")
+    print("[INFO] Do NOT pre-normalize or convert your EEG/EDA data before streaming to this script.")
     user_id = input("Enter user ID for this session: ")
-    # Ask for calibration duration
-    try:
-        duration_input = input("Enter calibration duration in seconds (default 10): ").strip()
-        if duration_input == '':
-            calibration_duration = 10
-        else:
-            calibration_duration = int(duration_input)
-    except Exception:
-        calibration_duration = 10
+    # Calibration duration is always 60 seconds
+    calibration_duration = 60
     print(f"Calibration will last {calibration_duration} seconds at 250 Hz.")
     calibrate = input("Run calibration step for this user? (y/n): ").strip().lower() == 'y'
     if calibrate:
         baseline_csv, config_path = calibrate_user(user_id, calibration_duration_sec=calibration_duration)
         if baseline_csv is None:
             print("[WARN] Calibration skipped or failed. Continuing with generic/global model.")
+    # Load artifact regressors from user config if available
+    artifact_regressors = None
+    config_path = os.path.join(USER_CONFIG_DIR, f'{user_id}_config.json')
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            user_config = json.load(f)
+        artifact_regressors = user_config.get('artifact_regressors', None)
     print(f"Checking for user-specific model and scaler for user: {user_id}")
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
     user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
@@ -474,7 +480,7 @@ def main():
     print(f"[INFO] Using scaler: {getattr(scaler, 'scaler_path', user_scaler_path if os.path.exists(user_scaler_path) else SCALER_PATH)}")
 
     # LSL streams
-    print("Select the EEG LSL feature stream to use:")
+    print("Select the EEG LSL feature stream to use (must be RAW, unconverted EEG data):")
     eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream', allow_skip=True)
     if eeg_stream is not None:
         eeg_inlet = StreamInlet(eeg_stream)
@@ -482,7 +488,7 @@ def main():
     else:
         eeg_inlet = None
         print("EEG stream skipped. Will use generic model/scaler.")
-    print("Select the EDA LSL feature stream to use:")
+    print("Select the EDA LSL feature stream to use (must be RAW, unconverted EDA data):")
     eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals', allow_skip=True)
     if eda_stream is not None:
         eda_inlet = StreamInlet(eda_stream)
@@ -558,13 +564,26 @@ def main():
             eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
             eeg = np.array(eeg_sample[:8])
             acc_gyr = np.array(eeg_sample[8:14])
-            eeg_clean = eeg - np.mean(acc_gyr)
+            # --- RAW DATA CHECK ---
+            if np.issubdtype(eeg.dtype, np.integer):
+                print("[WARN] EEG data appears to be integer. RAW (unconverted, unnormalized) EEG is expected.")
+            elif np.nanmax(np.abs(eeg)) < 1.0:
+                print("[WARN] EEG data values are very small (<1.0). RAW EEG is expected. Check your LSL stream.")
+            if artifact_regressors is not None:
+                eeg_clean = apply_artifact_regression(eeg, acc_gyr, artifact_regressors)
+            else:
+                eeg_clean = eeg  # fallback: no artifact regression
         else:
             eeg_clean = np.zeros(8)
             eeg_ts = time.time()
         if eda_inlet is not None:
             eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
             eda = np.array(eda_sample[:2])
+            # --- RAW DATA CHECK ---
+            if np.issubdtype(eda.dtype, np.integer):
+                print("[WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
+            elif np.nanmax(np.abs(eda)) < 0.01:
+                print("[WARN] EDA data values are very small (<0.01). RAW EDA is expected. Check your LSL stream.")
         else:
             eda = np.zeros(2)
             eda_ts = eeg_ts
@@ -691,6 +710,33 @@ def main():
                 'f1_score': f1
             }]).to_csv(rt_report_path, index=False)
             print(f"[REPORT] Real-time classification report saved to {rt_report_path}")
+
+def apply_artifact_regression(eeg, acc_gyr, artifact_regressors):
+    """
+    Remove predicted artifact from each EEG channel using linear regression coefficients.
+    Args:
+        eeg: np.array, shape (8,) - raw EEG channels
+        acc_gyr: np.array, shape (6,) - raw ACC/Gyro channels
+        artifact_regressors: list of dicts or np.array, len 8, each with 'coef' and 'intercept'
+    Returns:
+        eeg_clean: np.array, shape (8,)
+    """
+    eeg_clean = np.zeros_like(eeg)
+    for ch in range(8):
+        if artifact_regressors is not None and len(artifact_regressors) > ch:
+            reg = artifact_regressors[ch]
+            # Support both dict and sklearn LinearRegression
+            if isinstance(reg, dict):
+                coef = np.array(reg.get('coef', np.zeros(6)))
+                intercept = reg.get('intercept', 0.0)
+            else:
+                coef = np.array(getattr(reg, 'coef_', np.zeros(6)))
+                intercept = getattr(reg, 'intercept_', 0.0)
+            predicted_artifact = np.dot(coef, acc_gyr) + intercept
+            eeg_clean[ch] = eeg[ch] - predicted_artifact
+        else:
+            eeg_clean[ch] = eeg[ch]
+    return eeg_clean
 
 if __name__ == "__main__":
     main()
