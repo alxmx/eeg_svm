@@ -213,9 +213,14 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     for i in range(n_samples):
         eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
         eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
+        if eeg_sample is None or eda_sample is None:
+            print(f"[WARN] Missing sample at index {i}: eeg_sample is None: {eeg_sample is None}, eda_sample is None: {eda_sample is None}. Skipping.")
+            continue
         eeg = np.array(eeg_sample[:8])
         acc_gyr = np.array(eeg_sample[8:14])
         eda = np.array(eda_sample[:2])
+        # Always use only the second EDA channel (index 1)
+        eda_feat = eda[1]
         eeg_samples.append(eeg)
         accgyr_samples.append(acc_gyr)
         eda_samples.append(eda)
@@ -229,12 +234,14 @@ def calibrate_user(user_id, calibration_duration_sec=60):
             alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2  # PO7, PO8
             faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)  # C3 - C4
             beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))  # Fz
-            eda_norm = np.mean(eda_win)
+            eda_norm = np.mean(eda_win[:,1])  # Only use channel 1
             features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
             features_list.append(features)
             processed_outlet.push_sample(features, eeg_ts)
+            print(f"[DEBUG] calibration_processed: pushed features at t={eeg_ts:.3f} {features}")
         if i % 250 == 0:
             print(f"Collected {i} samples...")
+    print(f"[SUMMARY] calibration_processed: pushed {len(features_list)} feature windows.")
     # After collection, use features_list for baseline_arr
     baseline_arr = np.array(features_list)
     baseline_arr = baseline_arr[~np.isnan(baseline_arr).any(axis=1)]
@@ -661,16 +668,13 @@ def main():
         if len(EEG_BUFFER) == WINDOW_SIZE:
             eeg_win = np.array(EEG_BUFFER)
             eda_win = np.array(EDA_BUFFER)
-            # --- Apply scaling factors determined from input analysis ---
-            eeg_win = eeg_win * eeg_scale_factor
-            eda_win = eda_win * eda_scale_factor
             # --- Feature extraction (windowed, real) ---
             sf = 250
             theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))  # Fz
             alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2  # PO7, PO8
             faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)  # C3 - C4
             beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))  # Fz
-            eda_norm = np.mean(eda_win)
+            eda_norm = np.mean(eda_win[:,1])  # Only use channel 1
             features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
             sample = np.array(features).reshape(1, -1)
             # Warn if features are all zeros, all NaN, or constant
@@ -712,8 +716,7 @@ def main():
             if (now - last_push_time) >= MI_UPDATE_INTERVAL:
                 mean_mi = float(np.mean(mi_buffer)) if mi_buffer else 0.0
                 ts = TS_BUFFER[-1]
-                # State already determined above for last mi_pred
-                print(f"Pushed mean MI: {mean_mi:.3f} | State: {state} (to processed_MI stream)")
+                print(f"Pushed mean MI: {mean_mi:.3f} | State: {state} (to processed_MI stream) [DEBUG]")
                 mi_outlet.push_sample([mean_mi], ts)
                 mi_records.append({'mi': mean_mi, 'timestamp': ts, 'state': state})
                 mi_buffer = []
