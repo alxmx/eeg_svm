@@ -345,7 +345,7 @@ class OnlineVisualizer:
         self.timestamps = []
         self.last_metrics = {'precision': 1.0, 'recall': 1.0}
         self.fig, self.ax = plt.subplots()
-        self.fig.show()
+        # Do not show the figure during the process
 
     def update(self, mi_pred, label=None):
         self.mi_history.append(mi_pred)
@@ -354,9 +354,9 @@ class OnlineVisualizer:
             self.label_history.append(label)
         else:
             self.label_history.append(np.nan)
-        self.plot()
+        # Do not plot during the process
 
-    def plot(self):
+    def final_plot(self):
         self.ax.clear()
         self.ax.plot(self.mi_history, label='MI Prediction')
         if any(~np.isnan(self.label_history)):
@@ -365,10 +365,11 @@ class OnlineVisualizer:
         self.ax.set_xlabel('Sample')
         self.ax.set_ylabel('MI')
         self.ax.legend()
-        plt.pause(0.01)
-        # Save plot
-        fname = os.path.join(VIS_DIR, f'online_mi_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
+        plt.tight_layout()
+        fname = os.path.join(VIS_DIR, f'final_online_mi_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
         self.fig.savefig(fname)
+        print(f"[REPORT] Final MI plot saved to {fname}")
+        plt.show()
 
     def log_metrics(self, y_true, y_pred):
         from sklearn.metrics import precision_score, recall_score
@@ -710,6 +711,9 @@ def main():
                 'f1_score': f1
             }]).to_csv(rt_report_path, index=False)
             print(f"[REPORT] Real-time classification report saved to {rt_report_path}")
+
+        # --- Show and save final MI plot ---
+        visualizer.final_plot()
 
 def apply_artifact_regression(eeg, acc_gyr, artifact_regressors):
     """
