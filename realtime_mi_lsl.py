@@ -210,7 +210,12 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     window_size = 250  # 1 second window for feature extraction
     features_list = []
     print(f"Collecting {n_samples} samples at 250 Hz for {calibration_duration_sec} seconds...")
+    max_wall_time = calibration_duration_sec * 2
+    start_time = time.time()
     for i in range(n_samples):
+        if (time.time() - start_time) > max_wall_time:
+            print(f"[ERROR] Calibration exceeded maximum allowed time ({max_wall_time}s). Aborting calibration.")
+            break
         eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
         eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
         if eeg_sample is None or eda_sample is None:
@@ -241,10 +246,15 @@ def calibrate_user(user_id, calibration_duration_sec=60):
             print(f"[DEBUG] calibration_processed: pushed features at t={eeg_ts:.3f} {features}")
         if i % 250 == 0:
             print(f"Collected {i} samples...")
-    print(f"[SUMMARY] calibration_processed: pushed {len(features_list)} feature windows.")
+    actual_duration = time.time() - start_time
+    print(f"[SUMMARY] calibration_processed: pushed {len(features_list)} feature windows. Actual duration: {actual_duration:.2f} seconds.")
     # After collection, use features_list for baseline_arr
     baseline_arr = np.array(features_list)
     baseline_arr = baseline_arr[~np.isnan(baseline_arr).any(axis=1)]
+    min_valid_windows = int(0.5 * n_samples / window_size)  # Require at least 50% of expected windows
+    if baseline_arr.shape[0] < min_valid_windows:
+        print(f"[ERROR] Too few valid calibration windows collected ({baseline_arr.shape[0]} < {min_valid_windows}). Skipping calibration/model update.")
+        return None, None
     if baseline_arr.shape[0] == 0:
         print("[ERROR] All calibration samples are invalid (contain NaN). Skipping calibration/model update.")
         return None, None
