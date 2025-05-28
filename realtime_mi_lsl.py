@@ -256,7 +256,7 @@ def calibrate_user(user_id, calibration_duration_sec=10):
     print(f"[CONFIRM] Calibration config created: {config_path}")
 
     # --- AUTOMATIC SVR TRAINING AFTER CALIBRATION ---
-    print("[AUTO] Training SVR model for this user based on calibration data...")
+    print("[AUTO] Fine-tuning SVR model for this user based on calibration data, starting from generic model...")
     from sklearn.svm import SVR
     from sklearn.preprocessing import StandardScaler
     from sklearn.metrics import mean_absolute_error, r2_score
@@ -265,15 +265,35 @@ def calibrate_user(user_id, calibration_duration_sec=10):
     y_calib = np.array([calculate_mi(f) for f in X_calib])
 
     # Filter out NaN samples before training
-    scaler = StandardScaler().fit(X_calib)
-    X_calib_scaled = scaler.transform(X_calib)
-    valid_idx = ~np.isnan(X_calib_scaled).any(axis=1) & ~np.isnan(y_calib)
-    X_calib_scaled = X_calib_scaled[valid_idx]
+    valid_idx = ~np.isnan(X_calib).any(axis=1) & ~np.isnan(y_calib)
+    X_calib = X_calib[valid_idx]
     y_calib = y_calib[valid_idx]
-    if len(X_calib_scaled) == 0:
+    if len(X_calib) == 0:
         print("[ERROR] All calibration samples are invalid (NaN). Skipping calibration and model update.")
         return baseline_csv, config_path
-    svr = SVR().fit(X_calib_scaled, y_calib)
+
+    # Load generic scaler and model as base
+    generic_scaler_path = os.path.join(MODEL_DIR, 'scaler.joblib')
+    generic_model_path = os.path.join(MODEL_DIR, 'svm_model.joblib')
+    if os.path.exists(generic_scaler_path) and os.path.exists(generic_model_path):
+        base_scaler = load(generic_scaler_path)
+        base_model = load(generic_model_path)
+        print("[INFO] Loaded generic model and scaler as base for user fine-tuning.")
+    else:
+        print("[WARN] Generic model/scaler not found. Training from scratch.")
+        base_scaler = StandardScaler().fit(X_calib)
+        base_model = SVR()
+
+    # Fit scaler on user data (optionally could use partial_fit if available)
+    scaler = StandardScaler().fit(X_calib)
+    X_calib_scaled = scaler.transform(X_calib)
+
+    # Fine-tune SVR: re-fit on user data, starting from generic model's parameters
+    # (SVR does not support partial_fit, so we re-fit, but you could use warm_start for some estimators)
+    svr = SVR()
+    svr.set_params(**base_model.get_params())
+    svr.fit(X_calib_scaled, y_calib)
+
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
     user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
     dump(svr, user_model_path)
@@ -376,7 +396,11 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
         sample, _ = feature_inlet.pull_sample()
         x_raw = np.array(sample).reshape(1, -1)
         x_scaled = scaler.transform(x_raw)
-        mi_pred = online_model.predict(x_scaled)[0]
+        if np.isnan(x_scaled).any():
+            print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
+            mi_pred = 0.0  # or np.nan, or previous MI value
+        else:
+            mi_pred = svr.predict(x_scaled)[0]
         # Classify MI for Unity color logic
         if mi_pred >= 0.5:
             state = "Focused"
@@ -428,42 +452,12 @@ def main():
         print(f"User-specific model/scaler not found. Loading or training global model...")
         svr, scaler = load_or_train_models()
         print("Model and scaler ready.")
-    # Set up online learner
-    print("Initializing online adaptive model (SGDRegressor)...")
-    print("Loading calibration data for online model warm start...")
-    user_baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
-    if os.path.exists(user_baseline_csv):
-        calib_df = pd.read_csv(user_baseline_csv)
-        X = calib_df[FEATURE_ORDER].values
-        X_scaled = scaler.transform(X)
-        y = np.array([calculate_mi(f) for f in X])
-        # Filter out NaN rows
-        valid_idx = ~(np.isnan(X).any(axis=1) | np.isnan(y))
-        X_scaled = X_scaled[valid_idx]
-        y = y[valid_idx]
-        if X_scaled.shape[0] == 0:
-            print("[WARN] No valid calibration samples for online model. Using generic model.")
-            online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
-            X_train, _ = load_training_data()
-            X_train_scaled = scaler.transform(X_train)
-            online_model.partial_fit(X_train_scaled, svr.predict(X_train_scaled))
-        else:
-            print("Fitting online model with user SVR predictions...")
-            online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
-            online_model.partial_fit(X_scaled, svr.predict(X_scaled))
-            print("Online model initialized.")
-    else:
-        print("[WARN] No user calibration data found. Using generic model for online adaptation.")
-        online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
-        X_train, _ = load_training_data()
-        X_train_scaled = scaler.transform(X_train)
-        online_model.partial_fit(X_train_scaled, svr.predict(X_train_scaled))
-    # Try to load per-user online model if exists
-    user_online_model_path = ONLINE_MODEL_PATH_TEMPLATE.format(user_id)
-    if os.path.exists(user_online_model_path):
-        print(f"Loading previous online model for user {user_id}...")
-        online_model = load(user_online_model_path)
-        print("User-specific online model loaded.")
+    # Online adaptation is DISABLED in real-time operation per user request.
+    print("[INFO] Online adaptation is DISABLED during real-time MI prediction. Only user-specific model/scaler will be used.")
+
+    # Print which model/scaler version is being used for this session
+    print(f"[INFO] Using model: {getattr(svr, 'model_path', user_model_path if os.path.exists(user_model_path) else MODEL_PATH)}")
+    print(f"[INFO] Using scaler: {getattr(scaler, 'scaler_path', user_scaler_path if os.path.exists(user_scaler_path) else SCALER_PATH)}")
 
     # LSL streams
     print("Select the EEG LSL feature stream to use:")
@@ -552,7 +546,11 @@ def main():
             features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
             sample = np.array(features).reshape(1, -1)
             x_scaled = scaler.transform(sample)
-            mi_pred = online_model.predict(x_scaled)[0]
+            if np.isnan(x_scaled).any():
+                print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
+                mi_pred = 0.0  # or np.nan, or previous MI value
+            else:
+                mi_pred = svr.predict(x_scaled)[0]  # Use only the user-specific model/scaler
             ts = TS_BUFFER[-1]  # Use LSL timestamp of last sample in window
             if mi_pred >= 0.5:
                 state = "Focused"
@@ -567,25 +565,10 @@ def main():
             if len(mi_window) > ONLINE_UPDATE_WINDOW:
                 mi_window.pop(0)
             label, label_ts = label_inlet.pull_sample(timeout=0.01)
-            update_triggered = False
-            if len(mi_window) == ONLINE_UPDATE_WINDOW and label:
-                above = sum([v >= MI_THRESHOLDS['focused'] for v in mi_window])
-                below = sum([v < MI_THRESHOLDS['neutral'] for v in mi_window])
-                if above / ONLINE_UPDATE_WINDOW >= ONLINE_UPDATE_RATIO:
-                    print(f"[AUTO-UPDATE] MI above focused threshold for {ONLINE_UPDATE_RATIO*100:.0f}% of window. Updating model with label {label[0]}.")
-                    online_model.partial_fit(x_scaled, [float(label[0])])
-                    update_triggered = True
-                elif below / ONLINE_UPDATE_WINDOW >= ONLINE_UPDATE_RATIO:
-                    print(f"[AUTO-UPDATE] MI below neutral threshold for {ONLINE_UPDATE_RATIO*100:.0f}% of window. Updating model with label {label[0]}.")
-                    online_model.partial_fit(x_scaled, [float(label[0])])
-                    update_triggered = True
-            if update_triggered:
-                dump(online_model, user_online_model_path)
-                print(f"User online model updated and saved to {user_online_model_path}")
+            # Online adaptation is disabled: just log label for offline retraining
+            if label:
                 visualizer.update(mi_pred, float(label[0]))
             else:
-                if label:
-                    print("Label received from Unity, but threshold not met. No update.")
                 visualizer.update(mi_pred)
             # Wait for next window (3 seconds)
             time.sleep(3)
