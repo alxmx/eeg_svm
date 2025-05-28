@@ -8,6 +8,13 @@ Real-time Mindfulness Index (MI) LSL Pipeline
 Usage:
     python realtime_mi_lsl.py
 
+Unity Integration Instructions:
+- The script creates an LSL stream named 'processed_MI' (type 'MI', 1 channel, float32) that outputs the real-time Mindfulness Index (MI) for the current user/session.
+- In your Unity project, use an LSL receiver (e.g., LSL4Unity or LabStreamingLayer.NET) to connect to the 'processed_MI' stream.
+- The MI value is sent as a single float per sample. You can use this value for real-time feedback, visualization, or adaptive game logic.
+- The MI stream is available as long as the Python script is running and processing data.
+- If you want to record the MI stream, use LabRecorder or a similar LSL-compatible tool.
+
 Dependencies:
     pip install numpy pandas scikit-learn pylsl joblib
 """
@@ -174,9 +181,15 @@ def calibrate_user(user_id, n_samples=100):
     print("\nPlease relax (e.g., eyes closed) and remain still. Collecting baseline samples...")
     print("Select the EEG LSL feature stream to use for calibration:")
     eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream')
+    if eeg_stream.channel_count() < 14:
+        print(f"[ERROR] Selected EEG stream has {eeg_stream.channel_count()} channels. At least 14 (8 EEG + 6 ACC/Gyro) required. Skipping calibration.")
+        return None, None
     eeg_inlet = StreamInlet(eeg_stream)
     print("Select the EDA LSL feature stream to use for calibration:")
     eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals')
+    if eda_stream.channel_count() < 2:
+        print(f"[ERROR] Selected EDA stream has {eda_stream.channel_count()} channels. At least 2 required. Skipping calibration.")
+        return None, None
     eda_inlet = StreamInlet(eda_stream)
     # Set up a new LSL stream for processed calibration data (features only)
     processed_info = StreamInfo('calibration_processed', 'ProcessedCalibration', len(FEATURE_ORDER), 10, 'float32', f'calib_{user_id}')
@@ -189,10 +202,10 @@ def calibrate_user(user_id, n_samples=100):
     for i in range(N):
         eeg_sample, _ = eeg_inlet.pull_sample()
         eda_sample, _ = eda_inlet.pull_sample()
-        # --- Artifact reduction and feature extraction ---
+        # Use only correct channels
         eeg = np.array(eeg_sample[:8])  # First 8 EEG channels
         acc_gyr = np.array(eeg_sample[8:14])  # Next 6 channels for artifact reduction
-        eda = np.array(eda_sample)  # EDA channels
+        eda = np.array(eda_sample[:2])  # First 2 EDA channels
         # Example: simple artifact reduction (replace with your method)
         eeg_clean = eeg - np.mean(acc_gyr)  # Placeholder for real artifact reduction
         # Feature extraction (replace with your actual feature extraction)
@@ -208,6 +221,11 @@ def calibrate_user(user_id, n_samples=100):
         print(f"Collected and streamed baseline sample {i+1}/{N}")
         time.sleep(sample_interval)
     baseline_arr = np.array(baseline_features)
+    # Filter out rows with NaN before saving/training
+    baseline_arr = baseline_arr[~np.isnan(baseline_arr).any(axis=1)]
+    if baseline_arr.shape[0] == 0:
+        print("[ERROR] All calibration samples are invalid (contain NaN). Skipping calibration/model update.")
+        return None, None
     # Save baseline features as CSV for this user (append if exists)
     baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
     new_df = pd.DataFrame(baseline_arr, columns=FEATURE_ORDER)
@@ -242,25 +260,15 @@ def calibrate_user(user_id, n_samples=100):
     X_calib = calib_df[FEATURE_ORDER].values
     y_calib = np.array([calculate_mi(f) for f in X_calib])
 
-    # --- Evaluate previous model/scaler if they exist ---
-    prev_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
-    prev_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
-    prev_metrics = None
-    if os.path.exists(prev_model_path) and os.path.exists(prev_scaler_path):
-        prev_svr = load(prev_model_path)
-        prev_scaler = load(prev_scaler_path)
-        X_prev_scaled = prev_scaler.transform(X_calib)
-        y_prev_pred = prev_svr.predict(X_prev_scaled)
-        prev_mae = mean_absolute_error(y_calib, y_prev_pred)
-        prev_r2 = r2_score(y_calib, y_prev_pred)
-        prev_metrics = {'mae': prev_mae, 'r2': prev_r2}
-        print(f"[REPORT] Previous model on new calibration: MAE={prev_mae:.4f}, R2={prev_r2:.4f}")
-    else:
-        print("[REPORT] No previous user model/scaler to compare.")
-
-    # --- Train new model/scaler ---
+    # Filter out NaN samples before training
     scaler = StandardScaler().fit(X_calib)
     X_calib_scaled = scaler.transform(X_calib)
+    valid_idx = ~np.isnan(X_calib_scaled).any(axis=1) & ~np.isnan(y_calib)
+    X_calib_scaled = X_calib_scaled[valid_idx]
+    y_calib = y_calib[valid_idx]
+    if len(X_calib_scaled) == 0:
+        print("[ERROR] All calibration samples are invalid (NaN). Skipping calibration and model update.")
+        return baseline_csv, config_path
     svr = SVR().fit(X_calib_scaled, y_calib)
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
     user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
@@ -279,8 +287,6 @@ def calibrate_user(user_id, n_samples=100):
         'user_id': user_id,
         'calibration_time': str(datetime.now()),
         'n_samples': len(y_calib),
-        'prev_mae': prev_metrics['mae'] if prev_metrics else None,
-        'prev_r2': prev_metrics['r2'] if prev_metrics else None,
         'new_mae': new_mae,
         'new_r2': new_r2
     }
@@ -403,7 +409,9 @@ def main():
     print(f"Calibration will last {calibration_duration} seconds.")
     calibrate = input("Run calibration step for this user? (y/n): ").strip().lower() == 'y'
     if calibrate:
-        calibrate_user(user_id, n_samples=calibration_duration)
+        baseline_csv, config_path = calibrate_user(user_id, n_samples=calibration_duration)
+        if baseline_csv is None:
+            print("[WARN] Calibration skipped or failed. Continuing with generic/global model.")
     print(f"Checking for user-specific model and scaler for user: {user_id}")
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
     user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
@@ -416,20 +424,36 @@ def main():
         print(f"User-specific model/scaler not found. Loading or training global model...")
         svr, scaler = load_or_train_models()
         print("Model and scaler ready.")
-
     # Set up online learner
     print("Initializing online adaptive model (SGDRegressor)...")
     print("Loading calibration data for online model warm start...")
-    # Use user-specific calibration data for warm start
-    calib_df = pd.read_csv(os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv'))
-    X = calib_df[FEATURE_ORDER].values
-    X_scaled = scaler.transform(X)
-    y = np.array([calculate_mi(f) for f in X])
-    print("Fitting online model with user SVR predictions...")
-    online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
-    online_model.partial_fit(X_scaled, svr.predict(X_scaled))
-    print("Online model initialized.")
-
+    user_baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
+    if os.path.exists(user_baseline_csv):
+        calib_df = pd.read_csv(user_baseline_csv)
+        X = calib_df[FEATURE_ORDER].values
+        X_scaled = scaler.transform(X)
+        y = np.array([calculate_mi(f) for f in X])
+        # Filter out NaN rows
+        valid_idx = ~(np.isnan(X).any(axis=1) | np.isnan(y))
+        X_scaled = X_scaled[valid_idx]
+        y = y[valid_idx]
+        if X_scaled.shape[0] == 0:
+            print("[WARN] No valid calibration samples for online model. Using generic model.")
+            online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
+            X_train, _ = load_training_data()
+            X_train_scaled = scaler.transform(X_train)
+            online_model.partial_fit(X_train_scaled, svr.predict(X_train_scaled))
+        else:
+            print("Fitting online model with user SVR predictions...")
+            online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
+            online_model.partial_fit(X_scaled, svr.predict(X_scaled))
+            print("Online model initialized.")
+    else:
+        print("[WARN] No user calibration data found. Using generic model for online adaptation.")
+        online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
+        X_train, _ = load_training_data()
+        X_train_scaled = scaler.transform(X_train)
+        online_model.partial_fit(X_train_scaled, svr.predict(X_train_scaled))
     # Try to load per-user online model if exists
     user_online_model_path = ONLINE_MODEL_PATH_TEMPLATE.format(user_id)
     if os.path.exists(user_online_model_path):
@@ -469,11 +493,21 @@ def main():
     mi_records = []  # To store MI, timestamp, and state
     import threading
     import sys
+    import msvcrt  # For ESC key detection on Windows
     stop_flag = {'stop': False}
-    def wait_for_enter():
-        input("\nPress Enter to end the session and generate report...\n")
-        stop_flag['stop'] = True
-    t = threading.Thread(target=wait_for_enter)
+    def wait_for_exit():
+        print("\nPress Enter or ESC to end the session and generate report...\n")
+        while True:
+            if msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key == b'\r' or key == b'\n':  # Enter key
+                    stop_flag['stop'] = True
+                    break
+                elif key == b'\x1b':  # ESC key
+                    stop_flag['stop'] = True
+                    break
+            time.sleep(0.05)
+    t = threading.Thread(target=wait_for_exit)
     t.daemon = True
     t.start()
     while not stop_flag['stop']:
@@ -530,7 +564,7 @@ def main():
             dump(online_model, user_online_model_path)
             print(f"User online model updated and saved to {user_online_model_path}")
             visualizer.update(mi_pred, float(label[0]))
-            visualizer.log_metrics(np.array(visualizer.label_history), np.array(visualizer.mi_history))
+            # No metrics logging here; only at end
         else:
             if label:
                 print("Label received from Unity, but threshold not met. No update.")
@@ -552,7 +586,7 @@ def main():
             'mi_min': np.min(mi_arr),
             'mi_max': np.max(mi_arr),
             'focused_pct': 100 * sum(v >= 0.5 for v in mi_arr) / len(mi_arr),
-            'neutral_pct': 100 * sum((v >= 0.37) and (v < 0.5) for v in mi_arr) / len(mi_arr),
+            'neutral_pct': 100 * sum((v >= 0.37) and (v < 0.5) for v in mi_arr),
             'unfocused_pct': 100 * sum(v < 0.37 for v in mi_arr) / len(mi_arr)
         }
         report_path = os.path.join(LOG_DIR, f'{user_id}_mi_report_{session_time}.csv')
@@ -561,8 +595,29 @@ def main():
         for k, v in summary.items():
             print(f"{k}: {v}")
         print(f"\n[REPORT] Session summary saved to {report_path}")
-    else:
-        print("No MI data recorded in this session.")
 
-if __name__ == '__main__':
+        # --- Real-time classification comparative (only at end) ---
+        # If Unity labels were received, compare MI predictions to labels
+        label_vals = [l for l in visualizer.label_history if not np.isnan(l)]
+        if label_vals:
+            from sklearn.metrics import precision_score, recall_score, f1_score
+            y_true_bin = [bin_mi(val) for val in label_vals]
+            y_pred_bin = [bin_mi(val) for val in visualizer.mi_history[:len(y_true_bin)]]
+            precision = precision_score(y_true_bin, y_pred_bin, average='macro', zero_division=0)
+            recall = recall_score(y_true_bin, y_pred_bin, average='macro', zero_division=0)
+            f1 = f1_score(y_true_bin, y_pred_bin, average='macro', zero_division=0)
+            print(f"[REAL-TIME CLASSIFICATION REPORT] Precision: {precision:.3f}, Recall: {recall:.3f}, F1 Score: {f1:.3f}")
+
+            # --- Save real-time classification report ---
+            rt_report_path = os.path.join(LOG_DIR, f'{user_id}_mi_realtime_classification_report_{session_time}.csv')
+            pd.DataFrame([{
+                'user_id': user_id,
+                'session_time': session_time,
+                'precision': precision,
+                'recall': recall,
+                'f1_score': f1
+            }]).to_csv(rt_report_path, index=False)
+            print(f"[REPORT] Real-time classification report saved to {rt_report_path}")
+
+if __name__ == "__main__":
     main()
