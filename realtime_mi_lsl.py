@@ -205,6 +205,8 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     print(f"Calibration processed LSL stream created as 'calibration_processed' with {len(FEATURE_ORDER)} channels at 250 Hz.\n")
     eeg_samples, eda_samples, accgyr_samples, ts_samples = [], [], [], []
     n_samples = int(250 * calibration_duration_sec)
+    window_size = 250  # 1 second window for feature extraction
+    features_list = []
     print(f"Collecting {n_samples} samples at 250 Hz for {calibration_duration_sec} seconds...")
     for i in range(n_samples):
         eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
@@ -216,40 +218,23 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         accgyr_samples.append(acc_gyr)
         eda_samples.append(eda)
         ts_samples.append(eeg_ts)  # Use EEG timestamp as reference
-        # Feature extraction placeholder (replace with your method)
-        # theta_fz = np.mean(eeg)
-        # alpha_po = np.mean(eeg)
-        # faa = np.mean(eeg)
-        # beta_frontal = np.mean(eeg)
-        # eda_norm = np.mean(eda)
-        # features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-        # processed_outlet.push_sample(features, eeg_ts)
-        # Instead, use real features:
-        # Assume EEG channels: [Fz, Cz, Pz, Oz, C3, C4, PO7, PO8] (adjust as needed)
-        eeg_arr = np.array(eeg)
-        sf = 250
-        theta_fz = compute_bandpower(eeg_arr[0], sf, (4,8))  # Fz
-        alpha_po = (compute_bandpower(eeg_arr[6], sf, (8,13)) + compute_bandpower(eeg_arr[7], sf, (8,13))) / 2  # PO7, PO8
-        faa = np.log(compute_bandpower(eeg_arr[4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_arr[5], sf, (8,13)) + 1e-8)  # C3 - C4
-        beta_frontal = compute_bandpower(eeg_arr[0], sf, (13,30))  # Fz
-        eda_norm = np.mean(eda)
-        features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-        processed_outlet.push_sample(features, eeg_ts)
+        # Only compute features if we have a full window
+        if len(eeg_samples) >= window_size:
+            eeg_win = np.array(eeg_samples[-window_size:])  # shape (window_size, 8)
+            eda_win = np.array(eda_samples[-window_size:])  # shape (window_size, 2)
+            sf = 250
+            theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))  # Fz
+            alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2  # PO7, PO8
+            faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)  # C3 - C4
+            beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))  # Fz
+            eda_norm = np.mean(eda_win)
+            features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+            features_list.append(features)
+            processed_outlet.push_sample(features, eeg_ts)
         if i % 250 == 0:
             print(f"Collected {i} samples...")
-    # Downsample/interpolate EDA to match EEG timestamps if needed
-    eeg_samples = np.array(eeg_samples)  # shape (n_samples, 8)
-    accgyr_samples = np.array(accgyr_samples)  # shape (n_samples, 6)
-    eda_samples = np.array(eda_samples)
-    ts_samples = np.array(ts_samples)
-    # Save features as before
-    baseline_arr = np.column_stack([
-        eeg_samples.mean(axis=1),  # placeholder for theta_fz
-        eeg_samples.mean(axis=1),  # placeholder for alpha_po
-        eeg_samples.mean(axis=1),  # placeholder for faa
-        eeg_samples.mean(axis=1),  # placeholder for beta_frontal
-        eda_samples.mean(axis=1)   # placeholder for eda_norm
-    ])
+    # After collection, use features_list for baseline_arr
+    baseline_arr = np.array(features_list)
     baseline_arr = baseline_arr[~np.isnan(baseline_arr).any(axis=1)]
     if baseline_arr.shape[0] == 0:
         print("[ERROR] All calibration samples are invalid (contain NaN). Skipping calibration/model update.")
