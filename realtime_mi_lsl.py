@@ -474,7 +474,6 @@ def main():
     print("[INFO] This script expects RAW (unconverted, unnormalized) EEG and EDA data from LSL streams.")
     print("[INFO] Do NOT pre-normalize or convert your EEG/EDA data before streaming to this script.")
     user_id = input("Enter user ID for this session: ")
-    # Calibration duration is always 60 seconds
     calibration_duration = 60
     print(f"Calibration will last {calibration_duration} seconds at 250 Hz.")
     calibrate = input("Run calibration step for this user? (y/n): ").strip().lower() == 'y'
@@ -484,10 +483,7 @@ def main():
             print("[WARN] Calibration skipped or failed. Continuing with generic/global model.")
         else:
             print("[INFO] Calibration complete. Proceeding to real-time MI prediction...")
-
     # --- Everything below here should ALWAYS run, regardless of calibration ---
-    # Model/scaler loading, LSL stream selection, MI feedback loop, etc.
-    # Load artifact regressors from user config if available
     artifact_regressors = None
     config_path = os.path.join(USER_CONFIG_DIR, f'{user_id}_config.json')
     if os.path.exists(config_path):
@@ -506,13 +502,9 @@ def main():
         print(f"User-specific model/scaler not found. Loading or training global model...")
         svr, scaler = load_or_train_models()
         print("Model and scaler ready.")
-    # Online adaptation is DISABLED in real-time operation per user request.
     print("[INFO] Online adaptation is DISABLED during real-time MI prediction. Only user-specific model/scaler will be used.")
-
-    # Print which model/scaler version is being used for this session
     print(f"[INFO] Using model: {getattr(svr, 'model_path', user_model_path if os.path.exists(user_model_path) else MODEL_PATH)}")
     print(f"[INFO] Using scaler: {getattr(scaler, 'scaler_path', user_scaler_path if os.path.exists(user_scaler_path) else SCALER_PATH)}")
-
     # LSL streams
     print("Select the EEG LSL feature stream to use (must be RAW, unconverted EEG data):")
     eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream', allow_skip=True)
@@ -530,15 +522,21 @@ def main():
     else:
         eda_inlet = None
         print("EDA stream skipped. Will use generic model/scaler.")
-    print("Resolving Unity label stream (type='UnityMarkers')...")
-    label_stream = select_lsl_stream('UnityMarkers', confirm=False)
-    label_inlet = StreamInlet(label_stream)
-    print("Unity label stream connected.")
-    print("Creating MI output LSL stream (type='processed_MI')...")
-    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')  # 1 Hz output
-    mi_outlet = StreamOutlet(mi_info)
-    print("MI output stream created as 'processed_MI'.\n")
-
+    # --- New: Option to continue in offline/report mode if no LSL streams are found ---
+    try:
+        print("Resolving Unity label stream (type='UnityMarkers')...")
+        label_stream = select_lsl_stream('UnityMarkers', confirm=False)
+        label_inlet = StreamInlet(label_stream)
+        print("Unity label stream connected.")
+    except RuntimeError as e:
+        print(f"[ERROR] {e}")
+        choice = input("No LSL label stream found. Type 'offline' to continue in offline/report mode, or press Enter to exit: ").strip().lower()
+        if choice == 'offline':
+            generate_offline_report()
+            return
+        else:
+            print("Exiting.")
+            return
     # Ask user for MI calculation rate and transmission interval
     try:
         mi_calc_rate_input = input("Enter MI calculation rate in Hz (default 10): ").strip()
@@ -894,6 +892,55 @@ def analyze_input_streams(eeg_inlet, eda_inlet, n_samples=500):
             print("  [WARN] EDA data values are very small (<0.01). RAW EDA is expected. Check your LSL stream.")
         if np.nanmax(np.abs(eda_arr)) > 10:
             print("  [WARN] EDA data values are very large (>10). Check for scaling or units.")
+
+def generate_offline_report():
+    print("\n[OFFLINE MODE] Generating report from available files...")
+    import glob
+    import pandas as pd
+    import os
+    LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+    USER_CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'user_configs')
+    # MI session summary
+    mi_files = glob.glob(os.path.join(LOG_DIR, '*_mi_session_*.csv'))
+    if mi_files:
+        print(f"Found {len(mi_files)} MI session files. Generating summary...")
+        summary = []
+        for f in mi_files:
+            try:
+                df = pd.read_csv(f)
+                if df.empty or not set(['mi']).issubset(df.columns):
+                    print(f"[WARN] Skipping empty or invalid MI session file: {os.path.basename(f)}")
+                    continue
+                mi_mean = df['mi'].mean()
+                mi_std = df['mi'].std()
+                focused_pct = (df['mi'] >= 0.5).mean() * 100
+                neutral_pct = ((df['mi'] >= 0.37) & (df['mi'] < 0.5)).mean() * 100
+                unfocused_pct = (df['mi'] < 0.37).mean() * 100
+                summary.append({'file': os.path.basename(f), 'mi_mean': mi_mean, 'mi_std': mi_std,
+                                'focused_pct': focused_pct, 'neutral_pct': neutral_pct, 'unfocused_pct': unfocused_pct})
+            except Exception as e:
+                print(f"[WARN] Could not process {os.path.basename(f)}: {e}")
+        if summary:
+            summary_path = os.path.join(LOG_DIR, 'mi_summary_report.csv')
+            pd.DataFrame(summary).to_csv(summary_path, index=False)
+            print(f"MI session summary saved to {summary_path}")
+        else:
+            print("No valid MI session files found for summary.")
+    else:
+        print("No MI session files found in logs/.")
+    # Calibration summary
+    baseline_files = glob.glob(os.path.join(USER_CONFIG_DIR, '*_baseline.csv'))
+    if baseline_files:
+        print(f"Found {len(baseline_files)} calibration baseline files.")
+    else:
+        print("No calibration baseline files found in user_configs/.")
+    # Model files
+    model_files = glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', '*.joblib'))
+    if model_files:
+        print(f"Found {len(model_files)} model/scaler files in models/.")
+    else:
+        print("No model/scaler files found in models/.")
+    print("[OFFLINE MODE] Report generation complete.\n")
 
 if __name__ == "__main__":
     main()
