@@ -35,6 +35,7 @@ from datetime import datetime
 import json
 import time
 import scipy.signal
+import seaborn as sns
 
 # --- CONFIG ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -736,7 +737,14 @@ def main():
     # --- After session: Save MI CSV and print report ---
     session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
-    pd.DataFrame(mi_records).to_csv(mi_csv_path, index=False)
+    # Save all features and state if available
+    session_df = pd.DataFrame(mi_records)
+    # If features are available, add them to the DataFrame
+    if 'features' in locals() and isinstance(features, list) and len(features) == 5:
+        # If features were collected in mi_records, add them
+        for i, feat_name in enumerate(FEATURE_ORDER):
+            session_df[feat_name] = [rec.get(feat_name, None) if isinstance(rec, dict) else None for rec in mi_records]
+    session_df.to_csv(mi_csv_path, index=False)
     print(f"\n[REPORT] MI session data saved to {mi_csv_path}")
     # Print summary of MI prediction skips if any
     if 'mi_skipped_count' in locals() and mi_skipped_count:
@@ -760,10 +768,43 @@ def main():
         }
         report_path = os.path.join(LOG_DIR, f'{user_id}_mi_report_{session_time}.csv')
         pd.DataFrame([summary]).to_csv(report_path, index=False)
-        print("\n[SESSION SUMMARY REPORT]")
-        for k, v in summary.items():
-            print(f"{k}: {v}")
         print(f"\n[REPORT] Session summary saved to {report_path}")
+
+        # --- Wilcoxon Signed-Rank Test for phases (if available) ---
+        try:
+            import scipy.stats as stats
+            if 'phase' in session_df.columns:
+                phases = session_df['phase'].dropna().unique()
+                if len(phases) == 2:
+                    vals1 = session_df[session_df['phase'] == phases[0]]['mi'].dropna()
+                    vals2 = session_df[session_df['phase'] == phases[1]]['mi'].dropna()
+                    if len(vals1) > 0 and len(vals2) > 0:
+                        stat, p = stats.wilcoxon(vals1, vals2)
+                        wilcoxon_result = {
+                            'phase1': phases[0],
+                            'phase2': phases[1],
+                            'wilcoxon_stat': stat,
+                            'wilcoxon_p': p
+                        }
+                        wilcoxon_path = os.path.join(LOG_DIR, f'{user_id}_wilcoxon_{session_time}.csv')
+                        pd.DataFrame([wilcoxon_result]).to_csv(wilcoxon_path, index=False)
+                        print(f"[REPORT] Wilcoxon Signed-Rank Test saved to {wilcoxon_path}")
+        except Exception as e:
+            print(f"[WARN] Wilcoxon test not computed: {e}")
+
+        # --- Spearman's rank correlation (features vs MI) ---
+        try:
+            spearman_results = []
+            for feat in FEATURE_ORDER:
+                if feat in session_df.columns:
+                    corr, p = stats.spearmanr(session_df[feat], session_df['mi'], nan_policy='omit')
+                    spearman_results.append({'feature': feat, 'spearman_corr': corr, 'spearman_p': p})
+            if spearman_results:
+                spearman_path = os.path.join(LOG_DIR, f'{user_id}_spearman_{session_time}.csv')
+                pd.DataFrame(spearman_results).to_csv(spearman_path, index=False)
+                print(f"[REPORT] Spearman correlations saved to {spearman_path}")
+        except Exception as e:
+            print(f"[WARN] Spearman correlation not computed: {e}")
 
         # --- Real-time classification comparative (only at end) ---
         # If Unity labels were received, compare MI predictions to labels
@@ -788,9 +829,40 @@ def main():
             }]).to_csv(rt_report_path, index=False)
             print(f"[REPORT] Real-time classification report saved to {rt_report_path}")
 
-        # --- Show and save final MI plot ---
+        # --- Show and save final MI plot and features plot ---
         visualizer.final_plot()
-
+        # Additional: Plot MI, features, and state/label over time for the session
+        try:
+            import matplotlib.pyplot as plt
+            import numpy as np
+            # Reload session_df to ensure all columns
+            session_df = pd.read_csv(mi_csv_path)
+            fig, axes = plt.subplots(7, 1, figsize=(12, 16), sharex=True)
+            axes[0].plot(session_df['mi'], label='MI', color='blue')
+            axes[0].set_ylabel('MI')
+            axes[0].legend()
+            for i, feat in enumerate(FEATURE_ORDER):
+                if feat in session_df.columns:
+                    axes[i+1].plot(session_df[feat], label=feat)
+                    axes[i+1].set_ylabel(feat)
+                    axes[i+1].legend()
+            if 'state' in session_df.columns:
+                axes[-1].plot(session_df['state'], label='State', color='purple')
+                axes[-1].set_ylabel('State')
+                axes[-1].legend()
+            elif 'label' in session_df.columns:
+                axes[-1].plot(session_df['label'], label='Label', color='purple')
+                axes[-1].set_ylabel('Label')
+                axes[-1].legend()
+            axes[-1].set_xlabel('Window')
+            plt.tight_layout()
+            plot_path = os.path.join(LOG_DIR, f'{user_id}_mi_features_state_{session_time}.png')
+            plt.savefig(plot_path)
+            print(f"[REPORT] MI, features, and state/label plot saved to {plot_path}")
+            plt.close(fig)
+        except Exception as e:
+            print(f"[WARN] Could not generate MI/features/state plot: {e}")
+# ...existing code...
 def apply_artifact_regression(eeg, acc_gyr, artifact_regressors):
     """
     Remove predicted artifact from each EEG channel using linear regression coefficients.
@@ -942,5 +1014,159 @@ def generate_offline_report():
         print("No model/scaler files found in models/.")
     print("[OFFLINE MODE] Report generation complete.\n")
 
+def merge_reports_to_excel_and_pdf(user_id=None):
+    import pandas as pd
+    import glob
+    import os
+    from datetime import datetime
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        print("[WARN] fpdf not installed. PDF report will not be generated. Install with 'pip install fpdf'.")
+        FPDF = None
+
+    log_dir = LOG_DIR
+    user = user_id if user_id else ''
+    # Find latest session_time for this user
+    mi_session_files = sorted(glob.glob(os.path.join(log_dir, f'{user}_mi_session_*.csv')))
+    if not mi_session_files:
+        print("[MERGE] No MI session files found to merge.")
+        return
+    latest_mi_session = mi_session_files[-1]
+    session_time = latest_mi_session.split('_mi_session_')[-1].replace('.csv','')
+    # Paths
+    summary_path = os.path.join(log_dir, f'{user}_mi_report_{session_time}.csv')
+    rt_class_path = os.path.join(log_dir, f'{user}_mi_realtime_classification_report_{session_time}.csv')
+    calib_comp_files = sorted(glob.glob(os.path.join(log_dir, f'{user}_calibration_comparative_*.csv')))
+    calib_comp_path = calib_comp_files[-1] if calib_comp_files else None
+
+    # Model file info
+    user_model_path = os.path.join(MODEL_DIR, f'{user}_svr_model.joblib')
+    global_model_path = os.path.join(MODEL_DIR, 'svm_model.joblib')
+    if os.path.exists(user_model_path):
+        model_used = user_model_path
+    elif os.path.exists(global_model_path):
+        model_used = global_model_path
+    else:
+        model_used = None
+    model_note = ""
+    if model_used:
+        model_time = datetime.fromtimestamp(os.path.getmtime(model_used)).strftime('%Y-%m-%d %H:%M:%S')
+        model_note = f"Model file: {os.path.basename(model_used)} (created: {model_time})"
+    else:
+        model_note = "Model file: Not found"
+
+    # Ensure all output files are labeled with user and date/time to avoid overwriting
+    excel_path = os.path.join(log_dir, f'{user}_merged_report_{session_time}.xlsx')
+    # Write Excel
+    with pd.ExcelWriter(excel_path) as writer:
+        pd.read_csv(latest_mi_session).to_excel(writer, sheet_name='MI Session', index=False)
+        if os.path.exists(summary_path):
+            pd.read_csv(summary_path).to_excel(writer, sheet_name='Session Summary', index=False)
+        if os.path.exists(rt_class_path):
+            pd.read_csv(rt_class_path).to_excel(writer, sheet_name='Real-time Classification', index=False)
+        if calib_comp_path and os.path.exists(calib_comp_path):
+            pd.read_csv(calib_comp_path).to_excel(writer, sheet_name='Calibration Comparative', index=False)
+        # Add model note as a separate sheet
+        pd.DataFrame([{"Model Info": model_note}]).to_excel(writer, sheet_name='Model Info', index=False)
+    print(f"[MERGE] Merged Excel report saved to {excel_path}")
+
+    # PDF summary
+    if FPDF is not None:
+        pdf_path = os.path.join(log_dir, f'{user}_merged_report_{session_time}.pdf')
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font('Arial', 'B', 16)
+        pdf.cell(0, 10, f'Mindfulness Index Session Report', ln=1)
+        pdf.set_font('Arial', '', 12)
+        pdf.cell(0, 10, f'User: {user}', ln=1)
+        pdf.cell(0, 10, f'Session Time: {session_time}', ln=1)
+        pdf.cell(0, 10, model_note, ln=1)
+        # Add summaries
+        if os.path.exists(summary_path):
+            pdf.set_font('Arial', 'B', 14)
+            pdf.cell(0, 10, 'Session Summary:', ln=1)
+            pdf.set_font('Arial', '', 12)
+            df = pd.read_csv(summary_path)
+            for col in df.columns:
+                pdf.cell(0, 8, f'{col}: {df.iloc[0][col]}', ln=1)
+        if os.path.exists(rt_class_path):
+            pdf.set_font('Arial', 'B', 14)
+            pdf.cell(0, 10, 'Real-time Classification:', ln=1)
+            pdf.set_font('Arial', '', 12)
+            df = pd.read_csv(rt_class_path)
+            for col in df.columns:
+                pdf.cell(0, 8, f'{col}: {df.iloc[0][col]}', ln=1)
+        # Compare user-specific and global calibration if both exist
+        global_calib_files = sorted(glob.glob(os.path.join(log_dir, f'calibration_comparative_*.csv')))
+        user_calib_mae, user_calib_r2 = None, None
+        global_calib_mae, global_calib_r2 = None, None
+        if calib_comp_path and os.path.exists(calib_comp_path):
+            pdf.set_font('Arial', 'B', 14)
+            pdf.cell(0, 10, 'Calibration Comparative:', ln=1)
+            pdf.set_font('Arial', '', 12)
+            df = pd.read_csv(calib_comp_path)
+            for col in df.columns:
+                pdf.cell(0, 8, f'{col}: {df.iloc[0][col]}', ln=1)
+            if 'new_mae' in df.columns:
+                user_calib_mae = df['new_mae'].iloc[0]
+            if 'new_r2' in df.columns:
+                user_calib_r2 = df['new_r2'].iloc[0]
+        # Find global calibration for comparison
+        for f in global_calib_files:
+            if user not in os.path.basename(f):  # crude filter for global
+                gdf = pd.read_csv(f)
+                if 'new_mae' in gdf.columns:
+                    global_calib_mae = gdf['new_mae'].iloc[0]
+                if 'new_r2' in gdf.columns:
+                    global_calib_r2 = gdf['new_r2'].iloc[0]
+                break
+        if user_calib_mae is not None and global_calib_mae is not None:
+            pdf.set_font('Arial', 'B', 13)
+            pdf.cell(0, 10, 'User vs Global Model Comparison:', ln=1)
+            pdf.set_font('Arial', '', 12)
+            pdf.cell(0, 8, f'User Model MAE: {user_calib_mae:.4f} | Global Model MAE: {global_calib_mae:.4f}', ln=1)
+            pdf.cell(0, 8, f'User Model R²: {user_calib_r2:.4f} | Global Model R²: {global_calib_r2:.4f}', ln=1)
+        pdf.output(pdf_path)
+        print(f"[MERGE] Merged PDF summary saved to {pdf_path}")
+    else:
+        print("[MERGE] PDF summary not generated (fpdf not installed).")
+
 if __name__ == "__main__":
     main()
+
+# --- Analysis and Visualization (separate section, not part of the pipeline) ---
+"""
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Load a session's feature CSV (e.g., baseline or MI session)
+df = pd.read_csv('user_configs/your_user_baseline.csv')  # or logs/your_user_mi_session_*.csv
+
+# Plot each feature over time
+feature_names = ['theta_fz', 'alpha_po', 'faa', 'beta_frontal', 'eda_norm']
+titles = [
+    'Attentional Engagement (theta_fz)',
+    'Alpha Power (alpha_po)',
+    'Frontal Alpha Asymmetry (FAA)',
+    'Beta Power (beta_frontal)',
+    'Normalized EDA (eda_norm)'
+]
+
+plt.figure(figsize=(15, 10))
+for i, (feat, title) in enumerate(zip(feature_names, titles), 1):
+    plt.subplot(5, 1, i)
+    plt.plot(df[feat])
+    plt.title(title)
+    plt.xlabel('Window')
+    plt.ylabel(feat)
+plt.tight_layout()
+plt.savefig('feature_time_series.png')
+plt.show()
+
+# Optional: Pairplot/correlation
+sns.pairplot(df[feature_names])
+plt.savefig('feature_pairplot.png')
+plt.show()
+"""

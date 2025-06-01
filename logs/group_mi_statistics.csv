@@ -1,0 +1,2 @@
+user,session,n_predictions,mi_mean,mi_std,mi_min,mi_max,focused_pct,neutral_pct,unfocused_pct,skipped_windows,n_missing,constant_stream,model_mae,model_r2,precision,recall,f1,phase_stats,feature_corrs,confusion_matrix
+002_C,1,249,-45869566839619.734,62126073770243.94,-128325619141525.02,5017729753574.27,60.24096385542169,0.0,39.75903614457831,0,0,0,,,,,,{},{},

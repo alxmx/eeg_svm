@@ -19,6 +19,7 @@ import pandas as pd
 from dash import Dash, html, dcc, dash_table
 import dash_bootstrap_components as dbc
 from pylsl import resolve_streams
+from dash.dependencies import Input, Output
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(BASE_DIR, 'logs')
@@ -116,18 +117,18 @@ app.layout = dbc.Container([
 ], fluid=True)
 
 @app.callback(
-    dash.dependencies.Output('lsl-table', 'data'),
-    dash.dependencies.Input('interval-lsl', 'n_intervals')
+    Output('lsl-table', 'data'),
+    Input('interval-lsl', 'n_intervals')
 )
 def update_lsl_table(n):
     return get_lsl_status()
 
 @app.callback(
-    dash.dependencies.Output('mi-files', 'data'),
-    dash.dependencies.Output('baseline-files', 'data'),
-    dash.dependencies.Output('model-files', 'data'),
-    dash.dependencies.Output('error-msg', 'children'),
-    dash.dependencies.Input('interval-lsl', 'n_intervals')
+    Output('mi-files', 'data'),
+    Output('baseline-files', 'data'),
+    Output('model-files', 'data'),
+    Output('error-msg', 'children'),
+    Input('interval-lsl', 'n_intervals')
 )
 def update_file_tables(n):
     errors = []
@@ -145,4 +146,4 @@ def update_file_tables(n):
     return mi_df.to_dict('records'), baseline_df.to_dict('records'), model_df.to_dict('records'), ' | '.join(errors)
 
 if __name__ == "__main__":
-    app.run_server(debug=True, port=8050)
+    app.run(debug=True, port=8050)
