@@ -1,10 +1,10 @@
 # Real-Time Mindfulness Index (MI) LSL Pipeline
 
 ## Project Goals
-- **Estimate Mindfulness Index (MI) in real-time** from raw EEG and EDA sensor data using robust, user-calibrated machine learning models.
+- **Estimate Mindfulness Index (MI) in real-time** from raw EEG and EDA sensor data using robust, user-calibrated ML models.
 - **Provide per-user calibration, artifact correction, and cumulative reporting** for research and neurofeedback applications.
 - **Stream MI values via LSL** for real-time feedback, visualization, or integration with external tools (e.g., Unity, LabRecorder).
-- **Ensure robust error handling, workflow automation, and portability** for easy setup and reliable operation.
+- Error handling, workflow automation, and portability for easy setup and reliable operation.
 
 ## Pipeline Overview
 1. **LSL Stream Selection:**
