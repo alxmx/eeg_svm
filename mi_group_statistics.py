@@ -173,13 +173,14 @@ def main():
             }
             group_summary.append(row)
     # Save summary
+    now_str = pd.Timestamp.now().strftime('%Y%m%d-%H%M%S')
     summary_df = pd.DataFrame(group_summary)
-    out_csv = os.path.join(LOG_DIR, 'group_mi_statistics.csv')
+    out_csv = os.path.join(LOG_DIR, f'group_mi_statistics_{now_str}.csv')
     summary_df.to_csv(out_csv, index=False)
     print(f"[REPORT] Group MI statistics saved to {out_csv}")
     # Optional: Excel and visualizations
     try:
-        out_xlsx = os.path.join(LOG_DIR, 'group_mi_statistics.xlsx')
+        out_xlsx = os.path.join(LOG_DIR, f'group_mi_statistics_{now_str}.xlsx')
         summary_df.to_excel(out_xlsx, index=False)
         print(f"[REPORT] Group MI statistics saved to {out_xlsx}")
     except Exception as e:
@@ -194,14 +195,14 @@ def main():
     plt.title('MI Distribution Across Participants')
     plt.legend()
     plt.tight_layout()
-    dist_plot_path = os.path.join(LOG_DIR, 'group_mi_distribution.png')
+    dist_plot_path = os.path.join(LOG_DIR, f'group_mi_distribution_{now_str}.png')
     plt.savefig(dist_plot_path)
-    print(f"[REPORT] MI distribution plot saved to group_mi_distribution.png")
+    print(f"[REPORT] MI distribution plot saved to {dist_plot_path}")
 
     # --- PDF summary report ---
     try:
         from fpdf import FPDF
-        pdf_path = os.path.join(LOG_DIR, 'group_mi_statistics.pdf')
+        pdf_path = os.path.join(LOG_DIR, f'group_mi_statistics_{now_str}.pdf')
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font('Arial', 'B', 16)

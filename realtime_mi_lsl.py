@@ -314,11 +314,11 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         print("[INFO] Loaded generic model and scaler as base for user fine-tuning.")
     else:
         print("[WARN] Generic model/scaler not found. Training from scratch.")
-        base_scaler = StandardScaler().fit(X_calib)
+        base_scaler = StandardScaler().fit(X_calib)  # Only if global not found
         base_model = SVR()
 
-    # Fit scaler on user data (optionally could use partial_fit if available)
-    scaler = StandardScaler().fit(X_calib)
+    # --- DO NOT re-fit scaler on user data ---
+    scaler = base_scaler
     X_calib_scaled = scaler.transform(X_calib)
 
     # Fine-tune SVR: re-fit on user data, starting from generic model's parameters
@@ -342,10 +342,8 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     svr.fit(X_fit, y_fit)
 
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
-    user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
     dump(svr, user_model_path)
-    dump(scaler, user_scaler_path)
-    print(f"[AUTO] User SVR model and scaler saved: {user_model_path}, {user_scaler_path}")
+    print(f"[AUTO] User SVR model saved: {user_model_path}")
 
     # --- Evaluate new model ---
     y_new_pred = svr.predict(X_calib_scaled)
@@ -588,11 +586,9 @@ def main():
             if np.issubdtype(eeg_arr.dtype, np.integer):
                 print("  [WARN] EEG data appears to be integer. RAW (unconverted, unnormalized) EEG is expected.")
             if np.nanmax(np.abs(eeg_arr)) < 1.0:
-                print("  [WARN] EEG data values are very small (<1.0). Will scale EEG by 1000 for feature extraction.")
-                eeg_scale_factor = 1000.0
-            elif np.nanmax(np.abs(eeg_arr)) > 1000:
-                print("  [WARN] EEG data values are very large (>1000). Will scale EEG by 0.001 for feature extraction.")
-                eeg_scale_factor = 0.001
+                print("  [WARN] EEG data values are very small (<1.0). RAW EEG is expected. Check your LSL stream.")
+            if np.nanmax(np.abs(eeg_arr)) > 1000:
+                print("  [WARN] EEG data values are very large (>1000). Check for amplifier scaling or units.")
         if eda_vals:
             eda_arr = np.vstack(eda_vals)
             print("\n[EDA RAW DATA ANALYSIS]")
@@ -601,12 +597,9 @@ def main():
             if np.issubdtype(eda_arr.dtype, np.integer):
                 print("  [WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
             if np.nanmax(np.abs(eda_arr)) < 0.01:
-                print("  [WARN] EDA data values are very small (<0.01). Will scale EDA by 100 for feature extraction.")
-                eda_scale_factor = 100.0
-            elif np.nanmax(np.abs(eda_arr)) > 10:
-                print("  [WARN] EDA data values are very large (>10). Will scale EDA by 0.1 for feature extraction.")
-                eda_scale_factor = 0.1
-        print(f"[INFO] EEG scale factor: {eeg_scale_factor}, EDA scale factor: {eda_scale_factor}\n")
+                print("  [WARN] EDA data values are very small (<0.01). RAW EDA is expected. Check your LSL stream.")
+            if np.nanmax(np.abs(eda_arr)) > 10:
+                print("  [WARN] EDA data values are very large (>10). Check for scaling or units.")
 
     # In the real-time MI prediction loop, apply scaling before feature extraction
     # Replace in the loop:
@@ -1132,6 +1125,10 @@ def merge_reports_to_excel_and_pdf(user_id=None):
     else:
         print("[MERGE] PDF summary not generated (fpdf not installed).")
 
+# IMPORTANT: Always use the global scaler for all users.
+# Only the SVR model is adapted per user after calibration.
+# This ensures consistent feature scaling and reliable predictions.
+
 if __name__ == "__main__":
     main()
 
@@ -1150,23 +1147,23 @@ titles = [
     'Attentional Engagement (theta_fz)',
     'Alpha Power (alpha_po)',
     'Frontal Alpha Asymmetry (FAA)',
-    'Beta Power (beta_frontal)',
-    'Normalized EDA (eda_norm)'
+    'Beta Power (beta_frontal)',lt.figure(figsize=(15, 10))
+    'Normalized EDA (eda_norm)'for i, (feat, title) in enumerate(zip(feature_names, titles), 1):
 ]
 
+]
+')
 plt.figure(figsize=(15, 10))
 for i, (feat, title) in enumerate(zip(feature_names, titles), 1):
-    plt.subplot(5, 1, i)
+    plt.subplot(5, 1, i)_time_series.png')
     plt.plot(df[feat])
     plt.title(title)
-    plt.xlabel('Window')
-    plt.ylabel(feat)
-plt.tight_layout()
+    plt.xlabel('Window'): Pairplot/correlation
+    plt.ylabel(feat)sns.pairplot(df[feature_names])
+plt.tight_layout()g')
 plt.savefig('feature_time_series.png')
 plt.show()
-
-# Optional: Pairplot/correlation
-sns.pairplot(df[feature_names])
+# Optional: Pairplot/correlationsns.pairplot(df[feature_names])
 plt.savefig('feature_pairplot.png')
 plt.show()
 """
