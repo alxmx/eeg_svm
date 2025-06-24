@@ -824,19 +824,22 @@ def main():
         raw_mi_value = calculate_raw_mi(sample[0])  # More dynamic range
         emi_value = calculate_emi(sample[0])       # Emotional mindfulness index
         
+        # Remap raw MI to 0-1 range for output
+        raw_mi_remapped = remap_raw_mi(raw_mi_value)
+        
         # Only push to LSL once per second (1 Hz)
         ts = ts_win_buf[-1]
-        print(f"Pushed MI: {mi_pred:.3f} | Raw MI: {raw_mi_value:.3f} | EMI: {emi_value:.3f} | State: {state}")
+        print(f"Pushed MI: {mi_pred:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f} | State: {state}")
         
         # Push all index types to their respective LSL streams
         mi_outlet.push_sample([mi_pred], ts)
-        raw_mi_outlet.push_sample([raw_mi_value], ts)
+        raw_mi_outlet.push_sample([raw_mi_remapped], ts)
         emi_outlet.push_sample([emi_value], ts)
         
         # Record for visualization/analysis
         mi_records.append({
             'mi': mi_pred, 
-            'raw_mi': raw_mi_value, 
+            'raw_mi': raw_mi_remapped, 
             'emi': emi_value,
             'timestamp': ts, 
             'state': state
@@ -1339,7 +1342,7 @@ def diagnose_mi_calculation():
     print(f"Result: MI = {ideal_mi}\n")
     
     # 2. Test with zero values
-    zero_features = np.array([0, 0, 0, 0, 0])
+    zero_features = np.array([0,  0, 0, 0, 0])
     print("TEST CASE 2: All zero values")
     zero_mi = calculate_mi_debug(zero_features)
     print(f"Result: MI = {zero_mi}\n")
@@ -1445,23 +1448,33 @@ def setup_mindfulness_lsl_streams():
     Setup multiple LSL output streams for different mindfulness indices.
     Returns a dictionary containing all the outlets.
     """
+    from pylsl import StreamInfo, StreamOutlet
+
     # Standard MI output
     mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')
     mi_outlet = StreamOutlet(mi_info)
     print("Created LSL output stream 'processed_MI' for MI values")
-    
+
     # Raw MI values (more dynamic range)
     raw_mi_info = StreamInfo('raw_MI', 'RawMI', 1, 1, 'float32', 'raw_mi_stream')
     raw_mi_outlet = StreamOutlet(raw_mi_info)
     print("Created LSL output stream 'raw_MI' for raw MI values (more dynamic range)")
-    
+
     # Emotional mindfulness index
     emi_info = StreamInfo('EMI', 'EmotionalMI', 1, 1, 'float32', 'emi_stream')
     emi_outlet = StreamOutlet(emi_info)
     print("Created LSL output stream 'EMI' for Emotional Mindfulness Index")
-    
+
     return {
         'mi': mi_outlet,
         'raw_mi': raw_mi_outlet,
         'emi': emi_outlet
     }
+
+def remap_raw_mi(raw_mi, min_val=-5, max_val=5):
+    """
+    Remap raw MI from [min_val, max_val] to [0, 1] using min-max scaling.
+    Values outside the range are clipped.
+    """
+    raw_mi_clipped = np.clip(raw_mi, min_val, max_val)
+    return (raw_mi_clipped - min_val) / (max_val - min_val)
