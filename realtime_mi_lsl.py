@@ -396,15 +396,22 @@ def calibrate_user(user_id, calibration_duration_sec=60):
 class OnlineVisualizer:
     def __init__(self):
         self.mi_history = []
+        self.raw_mi_history = []
+        self.emi_history = []
         self.label_history = []
         self.timestamps = []
         self.last_metrics = {'precision': 1.0, 'recall': 1.0}
-        self.fig, self.ax = plt.subplots()
+        self.fig, self.axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
         # Do not show the figure during the process
 
-    def update(self, mi_pred, label=None):
+    def update(self, mi_pred, raw_mi=None, emi=None, label=None):
+        """Update visualization with all types of MI data"""
+        # Store all values
         self.mi_history.append(mi_pred)
+        self.raw_mi_history.append(raw_mi if raw_mi is not None else np.nan)
+        self.emi_history.append(emi if emi is not None else np.nan)
         self.timestamps.append(datetime.now())
+        
         if label is not None:
             self.label_history.append(label)
         else:
@@ -412,18 +419,47 @@ class OnlineVisualizer:
         # Do not plot during the process
 
     def final_plot(self):
-        self.ax.clear()
-        self.ax.plot(self.mi_history, label='MI Prediction')
+        """Plot all mindfulness indices for comparison"""
+        # Clear all axes
+        for ax in self.axes:
+            ax.clear()
+        
+        # Create x-axis time points
+        x = np.arange(len(self.mi_history))
+        
+        # Plot MI on first subplot
+        self.axes[0].plot(x, self.mi_history, label='Standard MI', color='blue')
         if any(~np.isnan(self.label_history)):
-            self.ax.plot(self.label_history, label='Labels', linestyle='dashed')
-        self.ax.set_title('Online MI Prediction')
-        self.ax.set_xlabel('Sample')
-        self.ax.set_ylabel('MI')
-        self.ax.legend()
+            self.axes[0].plot(x, self.label_history, label='Labels', color='red', linestyle=':')
+        self.axes[0].set_title('Standard MI (0-1 range)')
+        self.axes[0].set_ylabel('MI Value')
+        self.axes[0].legend()
+        self.axes[0].set_ylim(0, 1)
+        self.axes[0].grid(True, alpha=0.3)
+        
+        # Plot Raw MI (unbounded) on second subplot
+        self.axes[1].plot(x, self.raw_mi_history, label='Raw MI', color='purple')
+        self.axes[1].set_title('Raw MI (More Dynamic Range)')
+        self.axes[1].set_ylabel('Raw Value')
+        self.axes[1].legend()
+        self.axes[1].grid(True, alpha=0.3)
+        
+        # Plot EMI on third subplot
+        self.axes[2].plot(x, self.emi_history, label='EMI', color='green')
+        self.axes[2].set_title('Emotional Mindfulness Index')
+        self.axes[2].set_xlabel('Samples')
+        self.axes[2].set_ylabel('EMI Value')
+        self.axes[2].legend()
+        self.axes[2].set_ylim(0, 1)
+        self.axes[2].grid(True, alpha=0.3)
+        
+        # Adjust layout and show
         plt.tight_layout()
-        fname = os.path.join(VIS_DIR, f'final_online_mi_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
+        
+        # Save plot
+        fname = os.path.join(VIS_DIR, f'mindfulness_indices_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
         self.fig.savefig(fname)
-        print(f"[REPORT] Final MI plot saved to {fname}")
+        print(f"[REPORT] Mindfulness indices plot saved to {fname}")
         plt.show()
 
     def log_metrics(self, y_true, y_pred):
@@ -453,17 +489,17 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
     online_model = SGDRegressor(max_iter=1000, learning_rate='optimal', eta0=0.01)
     X, y = load_training_data()
     X_scaled = scaler.transform(X)
-    online_model.partial_fit(X_scaled, svr.predict(X_scaled))
-
-    # Step 3: LSL setup
+    online_model.partial_fit(X_scaled, svr.predict(X_scaled))    # Step 3: LSL setup
     feature_stream = select_lsl_stream('Features')
     feature_inlet = StreamInlet(feature_stream)
     label_stream = select_lsl_stream('UnityMarkers', confirm=False)
     label_inlet = StreamInlet(label_stream)
-    # Create LSL output stream for MI
-    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')
-    mi_outlet = StreamOutlet(mi_info)
-    print("Created LSL output stream 'processed_MI' for MI values")
+    
+    # Create all LSL output streams
+    outlets = setup_mindfulness_lsl_streams()
+    mi_outlet = outlets['mi']
+    raw_mi_outlet = outlets['raw_mi']
+    emi_outlet = outlets['emi']
 
     visualizer = OnlineVisualizer()
     EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
@@ -586,14 +622,15 @@ def main():
         else:
             print("Exiting.")
             return
-    # Ask user for MI calculation rate and transmission interval
-    try:
+    # Ask user for MI calculation rate and transmission interval    try:
         mi_calc_rate_input = input("Enter MI calculation rate in Hz (default 10): ").strip()
         if mi_calc_rate_input == '':
             MI_CALC_RATE = 10
         else:
             MI_CALC_RATE = float(mi_calc_rate_input)
-    except Exception:        MI_CALC_RATE = 10
+    except Exception:
+        MI_CALC_RATE = 10
+        
     try:
         mi_update_interval_input = input("Enter MI transmission interval in seconds (default 3): ").strip()
         if mi_update_interval_input == '':
@@ -602,11 +639,11 @@ def main():
             MI_UPDATE_INTERVAL = float(mi_update_interval_input)
     except Exception:
         MI_UPDATE_INTERVAL = 3.0
-        
-    # Create LSL output stream for MI
-    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')
-    mi_outlet = StreamOutlet(mi_info)
-    print("Created LSL output stream 'processed_MI' for MI values")
+          # Create all LSL output streams
+    outlets = setup_mindfulness_lsl_streams()
+    mi_outlet = outlets['mi']
+    raw_mi_outlet = outlets['raw_mi']
+    emi_outlet = outlets['emi']
 
     visualizer = OnlineVisualizer()
     EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
@@ -773,8 +810,7 @@ def main():
         if mi_pred >= 0.5:
             state = "Focused"
         elif mi_pred >= 0.37:
-            state = "Neutral"
-        else:
+            state = "Neutral"        else:
             state = "Unfocused"
         print(f"MI: {mi_pred:.3f} | State: {state}")
         mi_buffer.append(mi_pred)
@@ -782,20 +818,36 @@ def main():
             if 'mi_skipped_count' not in locals():
                 mi_skipped_count = {}
             mi_skipped_count[skipped_reason] = mi_skipped_count.get(skipped_reason, 0) + 1
+            
+        # Calculate additional indices for more dynamic feedback
+        raw_mi_value = calculate_raw_mi(sample[0])  # More dynamic range
+        emi_value = calculate_emi(sample[0])       # Emotional mindfulness index
+        
         # Only push to LSL once per second (1 Hz)
         ts = ts_win_buf[-1]
-        print(f"Pushed MI: {mi_pred:.3f} | State: {state} (to processed_MI stream) [DEBUG]")
+        print(f"Pushed MI: {mi_pred:.3f} | Raw MI: {raw_mi_value:.3f} | EMI: {emi_value:.3f} | State: {state}")
+        
+        # Push all index types to their respective LSL streams
         mi_outlet.push_sample([mi_pred], ts)
-        mi_records.append({'mi': mi_pred, 'timestamp': ts, 'state': state})
-        label, label_ts = label_inlet.pull_sample(timeout=0.01)
-        if label:
+        raw_mi_outlet.push_sample([raw_mi_value], ts)
+        emi_outlet.push_sample([emi_value], ts)
+        
+        # Record for visualization/analysis
+        mi_records.append({
+            'mi': mi_pred, 
+            'raw_mi': raw_mi_value, 
+            'emi': emi_value,
+            'timestamp': ts, 
+            'state': state
+        })
+        label, label_ts = label_inlet.pull_sample(timeout=0.01)        if label:
             try:
                 label_val = float(label[0])
-                visualizer.update(mi_pred, label_val)
+                visualizer.update(mi_pred, raw_mi_value, emi_value, label_val)
             except (ValueError, TypeError):
-                visualizer.update(mi_pred, None)
+                visualizer.update(mi_pred, raw_mi_value, emi_value, None)
         else:
-            visualizer.update(mi_pred)
+            visualizer.update(mi_pred, raw_mi_value, emi_value)
     # --- After session: Save MI CSV and print report ---
     session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
@@ -1334,3 +1386,80 @@ def diagnose_mi_calculation():
 
 # You can run this by adding the following to your main() function or console:
 # diagnose_mi_calculation()
+
+def calculate_raw_mi(features):
+    """
+    Calculate raw mindfulness index (before sigmoid transformation).
+    This gives a more dynamic range of values.
+    """
+    normalized_features = np.array(features, dtype=float)
+    for i in range(len(normalized_features)):
+        if abs(normalized_features[i]) > 100000:
+            sign = np.sign(normalized_features[i])
+            normalized_features[i] = sign * np.log10(abs(normalized_features[i]))
+    
+    # Use standard weights
+    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
+    
+    # Calculate raw MI without sigmoid transformation
+    feature_scale = max(1.0, np.mean(np.abs(normalized_features)) / 50)
+    offset = min(1.0, 0.2 * feature_scale)
+    
+    raw_mi = np.dot(normalized_features, weights) - offset
+    # Clip to reasonable range but allow more variation
+    raw_mi_clipped = np.clip(raw_mi, -5, 5)
+    
+    return raw_mi_clipped
+
+def calculate_emi(features):
+    """
+    Calculate Emotional Mindfulness Index (EMI).
+    EMI emphasizes emotional control aspects by giving more weight to frontal alpha asymmetry (FAA)
+    and electrodermal activity (EDA).
+    """
+    normalized_features = np.array(features, dtype=float)
+    for i in range(len(normalized_features)):
+        if abs(normalized_features[i]) > 100000:
+            sign = np.sign(normalized_features[i])
+            normalized_features[i] = sign * np.log10(abs(normalized_features[i]))
+    
+    # Modified weights emphasizing emotional features
+    # [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+    emi_weights = np.array([0.15, 0.15, 0.35, -0.15, -0.20])  # More weight on FAA and EDA
+    
+    # Calculate EMI
+    raw_emi = np.dot(normalized_features, emi_weights) - 0.8  # Different offset for EMI
+    raw_emi = np.clip(raw_emi, -50, 50)  # Prevent overflow
+    emi = 1 / (1 + np.exp(-raw_emi))
+    
+    # Add dynamic factor to make EMI more responsive
+    dynamic_factor = np.std(normalized_features) * 0.2
+    emi = min(1.0, emi * (1 + dynamic_factor))
+    
+    return emi
+
+def setup_mindfulness_lsl_streams():
+    """
+    Setup multiple LSL output streams for different mindfulness indices.
+    Returns a dictionary containing all the outlets.
+    """
+    # Standard MI output
+    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')
+    mi_outlet = StreamOutlet(mi_info)
+    print("Created LSL output stream 'processed_MI' for MI values")
+    
+    # Raw MI values (more dynamic range)
+    raw_mi_info = StreamInfo('raw_MI', 'RawMI', 1, 1, 'float32', 'raw_mi_stream')
+    raw_mi_outlet = StreamOutlet(raw_mi_info)
+    print("Created LSL output stream 'raw_MI' for raw MI values (more dynamic range)")
+    
+    # Emotional mindfulness index
+    emi_info = StreamInfo('EMI', 'EmotionalMI', 1, 1, 'float32', 'emi_stream')
+    emi_outlet = StreamOutlet(emi_info)
+    print("Created LSL output stream 'EMI' for Emotional Mindfulness Index")
+    
+    return {
+        'mi': mi_outlet,
+        'raw_mi': raw_mi_outlet,
+        'emi': emi_outlet
+    }
