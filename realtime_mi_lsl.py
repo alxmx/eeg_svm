@@ -878,7 +878,7 @@ def compute_bandpower(data, sf, band, window_sec=None, relative=False):
 
 def resample_eda(eda_buffer, eda_timestamps, target_timestamps):
     """
-    Resample/interpolate EDA to match target timestamps (EEG timestamps).
+    Resample/interpolated EDA to match target timestamps (EEG timestamps).
     eda_buffer: list of [2,] arrays
     eda_timestamps: list of floats
     target_timestamps: list of floats (EEG timestamps)
