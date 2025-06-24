@@ -393,9 +393,16 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
     feature_inlet = StreamInlet(feature_stream)
     label_stream = select_lsl_stream('UnityMarkers', confirm=False)
     label_inlet = StreamInlet(label_stream)
-    mi_info = StreamInfo('MI_Output', 'MI', 1, 10, 'float32', 'mi_stream')
+    # Create LSL output stream for MI
+    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')
     mi_outlet = StreamOutlet(mi_info)
+    print("Created LSL output stream 'processed_MI' for MI values")
+
     visualizer = OnlineVisualizer()
+    EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
+    WINDOW_SIZE = 250  # 1 second at 250 Hz
+    mi_window = []  # Moving window for MI predictions
+    mi_records = []  # To store MI, timestamp, and state
 
     print("Starting 4-minute real-time MI feedback session...")
     start_time = time.time()
@@ -519,8 +526,7 @@ def main():
             MI_CALC_RATE = 10
         else:
             MI_CALC_RATE = float(mi_calc_rate_input)
-    except Exception:
-        MI_CALC_RATE = 10
+    except Exception:        MI_CALC_RATE = 10
     try:
         mi_update_interval_input = input("Enter MI transmission interval in seconds (default 3): ").strip()
         if mi_update_interval_input == '':
@@ -529,6 +535,11 @@ def main():
             MI_UPDATE_INTERVAL = float(mi_update_interval_input)
     except Exception:
         MI_UPDATE_INTERVAL = 3.0
+        
+    # Create LSL output stream for MI
+    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')
+    mi_outlet = StreamOutlet(mi_info)
+    print("Created LSL output stream 'processed_MI' for MI values")
 
     visualizer = OnlineVisualizer()
     EEG_BUFFER, EDA_BUFFER, TS_BUFFER = [], [], []
@@ -542,20 +553,22 @@ def main():
     if eeg_inlet is not None or eda_inlet is not None:
         print("\n[INFO] Running automatic input data analysis for EEG/EDA streams...")
         # Analyze and adapt scaling if needed
-        eeg_vals = []
-        eda_vals = []
+        # Import numpy here to avoid scope issues
+        import numpy as np
+        analysis_eeg_vals = []
+        analysis_eda_vals = []
         n_samples = 500
         for _ in range(n_samples):
             if eeg_inlet is not None:
                 eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.5)
                 if eeg_sample is not None:
-                    eeg_vals.append(np.array(eeg_sample[:8]))
+                    analysis_eeg_vals.append(np.array(eeg_sample[:8]))
             if eda_inlet is not None:
                 eda_sample, _ = eda_inlet.pull_sample(timeout=0.5)
                 if eda_sample is not None:
-                    eda_vals.append(np.array(eda_sample[:2]))
-        if eeg_vals:
-            eeg_arr = np.vstack(eeg_vals)
+                    analysis_eda_vals.append(np.array(eda_sample[:2]))
+        if analysis_eeg_vals:
+            eeg_arr = np.vstack(analysis_eeg_vals)
             print("\n[EEG RAW DATA ANALYSIS]")
             print(f"  Shape: {eeg_arr.shape}")
             print(f"  Min: {np.min(eeg_arr):.3f}, Max: {np.max(eeg_arr):.3f}, Mean: {np.mean(eeg_arr):.3f}, Std: {np.std(eeg_arr):.3f}")
@@ -565,8 +578,8 @@ def main():
                 print("  [WARN] EEG data values are very small (<1.0). RAW EEG is expected. Check your LSL stream.")
             if np.nanmax(np.abs(eeg_arr)) > 1000:
                 print("  [WARN] EEG data values are very large (>1000). Check for amplifier scaling or units.")
-        if eda_vals:
-            eda_arr = np.vstack(eda_vals)
+        if analysis_eda_vals:
+            eda_arr = np.vstack(analysis_eda_vals)
             print("\n[EDA RAW DATA ANALYSIS]")
             print(f"  Shape: {eda_arr.shape}")
             print(f"  Min: {np.min(eda_arr):.5f}, Max: {np.max(eda_arr):.5f}, Mean: {np.mean(eda_arr):.5f}, Std: {np.std(eda_arr):.5f}")
@@ -1123,23 +1136,21 @@ titles = [
     'Attentional Engagement (theta_fz)',
     'Alpha Power (alpha_po)',
     'Frontal Alpha Asymmetry (FAA)',
-    'Beta Power (beta_frontal)',lt.figure(figsize=(15, 10))
-    'Normalized EDA (eda_norm)'for i, (feat, title) in enumerate(zip(feature_names, titles), 1):
+    'Beta Power (beta_frontal)',
+    'Normalized EDA (eda_norm)'
 ]
-
-]
-')
 plt.figure(figsize=(15, 10))
 for i, (feat, title) in enumerate(zip(feature_names, titles), 1):
-    plt.subplot(5, 1, i)_time_series.png')
+    plt.subplot(5, 1, i)
     plt.plot(df[feat])
     plt.title(title)
-    plt.xlabel('Window'): Pairplot/correlation
-    plt.ylabel(feat)sns.pairplot(df[feature_names])
-plt.tight_layout()g')
+    plt.xlabel('Window')
+    plt.ylabel(feat)
+plt.tight_layout()
 plt.savefig('feature_time_series.png')
 plt.show()
-# Optional: Pairplot/correlationsns.pairplot(df[feature_names])
+# Optional: Pairplot/correlations
+sns.pairplot(df[feature_names])
 plt.savefig('feature_pairplot.png')
 plt.show()
 """
