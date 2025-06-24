@@ -20,7 +20,8 @@ Dependencies:
     pip install numpy pandas scikit-learn pylsl joblib
 """
 import os
-import glob
+import sys
+import time
 import numpy as np
 import pandas as pd
 from joblib import load, dump
@@ -33,7 +34,6 @@ import logging
 import matplotlib.pyplot as plt
 from datetime import datetime
 import json
-import time
 import scipy.signal
 import seaborn as sns
 from sklearn.metrics import mean_absolute_error, r2_score
@@ -290,10 +290,16 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     calib_df = pd.read_csv(baseline_csv)
     X_calib = calib_df[FEATURE_ORDER].values
     y_calib = np.array([calculate_mi(f) for f in X_calib])
+    # --- DEBUG: Print MI targets for calibration ---
+    print(f"[DEBUG] MI targets (y_calib) stats: min={y_calib.min()}, max={y_calib.max()}, unique={np.unique(y_calib)}")
     # Always fit a new scaler for the user calibration data
     scaler = StandardScaler().fit(X_calib)
     X_calib_scaled = scaler.transform(X_calib)
+    # --- DEBUG: Print first 5 scaled features ---
+    print(f"[DEBUG] First 5 scaled calibration features: {X_calib_scaled[:5]}")
+    print("[INFO] Training SVR model on calibration data...")
     svr = SVR().fit(X_calib_scaled, y_calib)
+    print("[INFO] SVR model training complete.")
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
     user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
     dump(svr, user_model_path)
