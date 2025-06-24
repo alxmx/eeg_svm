@@ -69,11 +69,58 @@ def bin_mi(mi):
         return 0  # Low (Unfocused)
 
 def calculate_mi(features):
-    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
-    raw_mi = np.dot(features, weights) - 1
-    # Clip raw_mi to avoid overflow in exp
-    raw_mi = np.clip(raw_mi, -50, 50)
+    """
+    Calculate MI from EEG/EDA features with automatic scaling for large inputs.
+    """
+    # Log the feature values for debugging
+    if any(abs(f) > 10000 for f in features):
+        print(f"[INFO] Large feature values detected: {features}")
+        
+    # Normalize range for extremely large values (log-scale if needed)
+    normalized_features = np.array(features, dtype=float)
+    for i in range(len(normalized_features)):
+        if abs(normalized_features[i]) > 100000:
+            # Use logarithmic scaling for very large values
+            sign = np.sign(normalized_features[i])
+            normalized_features[i] = sign * np.log10(abs(normalized_features[i]))
+            
+    # Adjust weights for specific large-scale input range
+    if np.max(np.abs(features)) > 100000:
+        weights = np.array([0.01, 0.01, 0.25, -0.05, -0.05])  # Reduced weight for large-amplitude features
+    else:
+        weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])    # Default weights
+    
+    # Calculate MI with adjusted offset based on feature scale
+    feature_scale = max(1.0, np.mean(np.abs(normalized_features)) / 50)
+    offset = min(1.0, 0.2 * feature_scale)  # Scale offset with feature magnitude
+    
+    # Final calculation
+    raw_mi = np.dot(normalized_features, weights) - offset
+    raw_mi = np.clip(raw_mi, -50, 50)  # Prevent overflow
     mi = 1 / (1 + np.exp(-raw_mi))
+    
+    return mi
+
+def calculate_mi_debug(features):
+    """Debug version of calculate_mi with detailed logging"""
+    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
+    weighted_features = features * weights
+    print(f"[DEBUG] Features: {features}")
+    print(f"[DEBUG] Weights: {weights}")
+    print(f"[DEBUG] Weighted features: {weighted_features}")
+    
+    dot_product = np.dot(features, weights)
+    print(f"[DEBUG] Dot product: {dot_product}")
+    
+    raw_mi = dot_product - 1
+    print(f"[DEBUG] Raw MI (before clip): {raw_mi}")
+    
+    raw_mi_clipped = np.clip(raw_mi, -50, 50)
+    print(f"[DEBUG] Raw MI (after clip): {raw_mi_clipped}")
+    
+    mi = 1 / (1 + np.exp(-raw_mi_clipped))
+    print(f"[DEBUG] Final MI: {mi}")
+    
     return mi
 
 def load_training_data():
@@ -290,6 +337,26 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     calib_df = pd.read_csv(baseline_csv)
     X_calib = calib_df[FEATURE_ORDER].values
     y_calib = np.array([calculate_mi(f) for f in X_calib])
+    
+    # --- DEBUG: Check and log feature statistics ---
+    feature_mins = np.min(X_calib, axis=0)
+    feature_maxs = np.max(X_calib, axis=0)
+    feature_means = np.mean(X_calib, axis=0)
+    feature_stds = np.std(X_calib, axis=0)
+    
+    print("\n[DEBUG] FEATURE STATISTICS DURING CALIBRATION:")
+    for i, feat in enumerate(FEATURE_ORDER):
+        print(f"  {feat}: min={feature_mins[i]:.2f}, max={feature_maxs[i]:.2f}, mean={feature_means[i]:.2f}, std={feature_stds[i]:.2f}")
+    
+    # Alert about potentially problematic feature values
+    for i, feat in enumerate(FEATURE_ORDER):
+        if abs(feature_maxs[i]) > 100000 or abs(feature_means[i]) > 10000:
+            print(f"[WARN] Feature '{feat}' has extremely large values! Consider scaling or normalization.")
+        elif abs(feature_maxs[i]) < 0.001 and abs(feature_maxs[i]) > 0:
+            print(f"[WARN] Feature '{feat}' has extremely small values! Consider scaling.")
+    
+    print("\n--- Debug information ends ---\n")
+    
     # --- DEBUG: Print MI targets for calibration ---
     print(f"[DEBUG] MI targets (y_calib) stats: min={y_calib.min()}, max={y_calib.max()}, unique={np.unique(y_calib)}")
     # Always fit a new scaler for the user calibration data
@@ -548,8 +615,8 @@ def main():
     mi_records = []  # To store MI, timestamp, and state
     print("Entering real-time MI prediction loop at 1 Hz. Classification every 3 seconds.")
     # --- Automatic input data analysis and adaptation ---
-    eeg_scale_factor = 1.0
-    eda_scale_factor = 1.0
+    eeg_scale_factor = 0.001  # Scale down large EEG values by 1000x
+    eda_scale_factor = 0.0001  # Scale down large EDA values by 10000x
     if eeg_inlet is not None or eda_inlet is not None:
         print("\n[INFO] Running automatic input data analysis for EEG/EDA streams...")
         # Analyze and adapt scaling if needed
@@ -689,6 +756,19 @@ def main():
             else:
                 mi_pred = svr.predict(x_scaled)[0]
                 skipped_reason = None
+                
+                # Add detailed debug info for near-zero MI values
+                if mi_pred < 0.0001:
+                    print("\n[DEBUG] Near-zero MI value detected!")
+                    print(f"[DEBUG] Raw features: {sample[0]}")
+                    print(f"[DEBUG] Scaled features: {x_scaled[0]}")
+                    # Recalculate with the calculate_mi formula to compare with model
+                    recalc_mi = calculate_mi(sample[0])
+                    print(f"[DEBUG] Direct MI calculation: {recalc_mi}, Model prediction: {mi_pred}")
+                    print(f"[DEBUG] Difference: {abs(recalc_mi - mi_pred):.6f}")
+                    if abs(recalc_mi - mi_pred) > 0.1:
+                        print("[DEBUG] Large difference between direct calculation and model! Check model training.")
+                    print("")
         # --- Real-time classification printout ---
         if mi_pred >= 0.5:
             state = "Focused"
@@ -844,7 +924,6 @@ def main():
             plt.close(fig)
         except Exception as e:
             print(f"[WARN] Could not generate MI/features/state plot: {e}")
-# ...existing code...
 def apply_artifact_regression(eeg, acc_gyr, artifact_regressors):
     """
     Remove predicted artifact from each EEG channel using linear regression coefficients.
@@ -881,19 +960,52 @@ def compute_bandpower(data, sf, band, window_sec=None, relative=False):
     window_sec: float or None
     relative: bool, return relative power
     """
+    # Handle extremely large values - auto-scale if necessary
+    max_value = np.max(np.abs(data))
+    if max_value > 100000:  # Extremely high values
+        scale_factor = 10000.0 / max_value
+        scaled_data = data * scale_factor
+        print(f"[WARN] Auto-scaling EEG data (max={max_value:.1f}) by factor {scale_factor:.6f}")
+    elif max_value < 0.01 and max_value > 0:  # Extremely low values
+        scale_factor = 1.0 / max_value 
+        scaled_data = data * scale_factor
+        print(f"[WARN] Auto-scaling EEG data (max={max_value:.6f}) by factor {scale_factor:.2f}")
+    else:
+        scaled_data = data
+    
     band = np.asarray(band)
     low, high = band
     if window_sec is not None:
         nperseg = int(window_sec * sf)
     else:
-        nperseg = min(256, len(data))
-    freqs, psd = scipy.signal.welch(data, sf, nperseg=nperseg)
-    freq_res = freqs[1] - freqs[0]
-    idx_band = np.logical_and(freqs >= low, freqs <= high)
-    bp = np.trapz(psd[idx_band], dx=freq_res)
-    if relative:
-        bp /= np.trapz(psd, dx=freq_res)
-    return bp
+        nperseg = min(256, len(scaled_data))
+    
+    try:
+        freqs, psd = scipy.signal.welch(scaled_data, sf, nperseg=nperseg)
+        freq_res = freqs[1] - freqs[0]
+        idx_band = np.logical_and(freqs >= low, freqs <= high)
+        
+        # Using scipy.integrate.trapezoid instead of deprecated np.trapz
+        try:
+            from scipy.integrate import trapezoid
+            bp = trapezoid(psd[idx_band], dx=freq_res)
+            if relative:
+                bp /= trapezoid(psd, dx=freq_res)
+        except ImportError:
+            # Fall back to np.trapz if needed
+            bp = np.trapz(psd[idx_band], dx=freq_res)
+            if relative:
+                bp /= np.trapz(psd, dx=freq_res)
+    
+        # Use log scale for large power values to reduce range
+        if bp > 10000:
+            bp = np.log10(bp)
+            
+        return bp
+    
+    except Exception as e:
+        print(f"[ERROR] Error in compute_bandpower: {e}")
+        return 1.0  # Return small default value instead of error
 
 def resample_eda(eda_buffer, eda_timestamps, target_timestamps):
     """
@@ -1119,6 +1231,10 @@ def merge_reports_to_excel_and_pdf(user_id=None):
 # This ensures consistent feature scaling and reliable predictions.
 
 if __name__ == "__main__":
+    # Ask if user wants to run diagnostics
+    diagnostics_choice = input("\nDo you want to run MI calculation diagnostics? (y/n): ").strip().lower()
+    if diagnostics_choice == 'y':
+        diagnose_mi_calculation()
     main()
 
 # --- Analysis and Visualization (separate section, not part of the pipeline) ---
@@ -1154,3 +1270,67 @@ sns.pairplot(df[feature_names])
 plt.savefig('feature_pairplot.png')
 plt.show()
 """
+
+def diagnose_mi_calculation():
+    """
+    Run diagnostic tests on MI calculation with sample data to identify issues.
+    Use this function when getting consistent 0 values for MI.
+    """
+    print("\n====== MI CALCULATION DIAGNOSTIC REPORT ======\n")
+    
+    # 1. Test with ideal values that should give high MI
+    ideal_features = np.array([100, 50, 0.5, 10, 1])  # High theta, alpha, moderate FAA, etc.
+    print("TEST CASE 1: Ideal values that should give high MI")
+    ideal_mi = calculate_mi_debug(ideal_features)
+    print(f"Result: MI = {ideal_mi}\n")
+    
+    # 2. Test with zero values
+    zero_features = np.array([0, 0, 0, 0, 0])
+    print("TEST CASE 2: All zero values")
+    zero_mi = calculate_mi_debug(zero_features)
+    print(f"Result: MI = {zero_mi}\n")
+    
+    # 3. Test with typical real data ranges
+    typical_features = np.array([25, 10, 0.2, 15, 5])
+    print("TEST CASE 3: Typical real data ranges")
+    typical_mi = calculate_mi_debug(typical_features)
+    print(f"Result: MI = {typical_mi}\n")
+    
+    # 4. Test with custom weight sets to see what produces better variations
+    print("TEST CASE 4: Testing different weight configurations")
+    test_weights = [
+        [0.25, 0.25, 0.2, -0.15, -0.1],  # Default
+        [0.5, 0.5, 0.5, -0.25, -0.25],   # Stronger weights
+        [0.1, 0.1, 0.1, -0.05, -0.05],   # Weaker weights
+    ]
+    
+    for i, weights in enumerate(test_weights):
+        print(f"Weight set {i+1}: {weights}")
+        weights = np.array(weights)
+        raw_mi = np.dot(typical_features, weights) - 1
+        mi = 1 / (1 + np.exp(-raw_mi))
+        print(f"Result with typical features: MI = {mi}\n")
+    
+    # 5. Test with different offset values
+    print("TEST CASE 5: Testing different offset values")
+    offsets = [-2, -1, -0.5, 0, 0.5]
+    for offset in offsets:
+        raw_mi = np.dot(typical_features, np.array([0.25, 0.25, 0.2, -0.15, -0.1])) - offset
+        mi = 1 / (1 + np.exp(-raw_mi))
+        print(f"Offset {offset}: MI = {mi}")
+    
+    print("\n====== END OF DIAGNOSTIC REPORT ======\n")
+    
+    print("RECOMMENDATIONS:")
+    print("1. If all test cases give 0, check for calculation issues or Python errors")
+    print("2. If only your real data gives 0, your feature values may be outside expected ranges")
+    print("3. Consider adjusting weights or offset based on the tests above")
+    print("4. Add print statements in your feature extraction code to verify values")
+    print("5. Examine your calibration data CSV to verify feature quality")
+    
+    # Return whether any of our tests produced reasonable values
+    has_variation = abs(ideal_mi - zero_mi) > 0.1
+    return has_variation
+
+# You can run this by adding the following to your main() function or console:
+# diagnose_mi_calculation()
