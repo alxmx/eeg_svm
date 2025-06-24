@@ -841,7 +841,8 @@ def main():
             'timestamp': ts, 
             'state': state
         })
-        label, label_ts = label_inlet.pull_sample(timeout=0.01)        if label:
+        label, label_ts = label_inlet.pull_sample(timeout=0.01)
+        if label:
             try:
                 label_val = float(label[0])
                 visualizer.update(mi_pred, raw_mi_value, emi_value, label_val)
