@@ -810,7 +810,8 @@ def main():
         if mi_pred >= 0.5:
             state = "Focused"
         elif mi_pred >= 0.37:
-            state = "Neutral"        else:
+            state = "Neutral"
+        else:
             state = "Unfocused"
         print(f"MI: {mi_pred:.3f} | State: {state}")
         mi_buffer.append(mi_pred)
