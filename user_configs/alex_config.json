@@ -1,0 +1,6 @@
+{
+  "user_id": "alex",
+  "baseline_csv": "D:\\eeg_svm\\user_configs\\alex_baseline.csv",
+  "calibration_time": "2025-06-24 16:27:23.032466",
+  "n_samples": 15000
+}
