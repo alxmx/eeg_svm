@@ -36,6 +36,7 @@ import json
 import time
 import scipy.signal
 import seaborn as sns
+from sklearn.metrics import mean_absolute_error, r2_score
 
 # --- CONFIG ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
