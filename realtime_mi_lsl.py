@@ -285,65 +285,19 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     print(f"[CONFIRM] Calibration config created: {config_path}")
 
     # --- AUTOMATIC SVR TRAINING AFTER CALIBRATION ---
-    print("[AUTO] Fine-tuning SVR model for this user based on calibration data, starting from generic model...")
-    from sklearn.svm import SVR
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import mean_absolute_error, r2_score
+    print("[AUTO] Fine-tuning SVR model for this user based on calibration data...")
     calib_df = pd.read_csv(baseline_csv)
     X_calib = calib_df[FEATURE_ORDER].values
     y_calib = np.array([calculate_mi(f) for f in X_calib])
-
-    # Warn if all MI values are 0 or 1 (likely feature/coding error)
-    if np.all(y_calib == 0) or np.all(y_calib == 1):
-        print("[ERROR] All calibration MI values are 0 or 1. This suggests a feature extraction or coding error. Skipping model update.")
-        return baseline_csv, config_path
-
-    # Filter out NaN samples before training
-    valid_idx = ~np.isnan(X_calib).any(axis=1) & ~np.isnan(y_calib)
-    X_calib = X_calib[valid_idx]
-    y_calib = y_calib[valid_idx]
-    if len(X_calib) == 0:
-        print("[ERROR] All calibration samples are invalid (NaN). Skipping calibration and model update.")
-        return baseline_csv, config_path
-    # Load generic scaler and model as base
-    generic_scaler_path = os.path.join(MODEL_DIR, 'scaler.joblib')
-    generic_model_path = os.path.join(MODEL_DIR, 'svm_model.joblib')
-    if os.path.exists(generic_scaler_path) and os.path.exists(generic_model_path):
-        base_scaler = load(generic_scaler_path)
-        base_model = load(generic_model_path)
-        print("[INFO] Loaded generic model and scaler as base for user fine-tuning.")
-    else:
-        print("[WARN] Generic model/scaler not found. Training from scratch.")
-        base_scaler = StandardScaler().fit(X_calib)  # Only if global not found
-        base_model = SVR()
-
-    # --- DO NOT re-fit scaler on user data ---
-    scaler = base_scaler
+    # Always fit a new scaler for the user calibration data
+    scaler = StandardScaler().fit(X_calib)
     X_calib_scaled = scaler.transform(X_calib)
-
-    # Fine-tune SVR: re-fit on user data, starting from generic model's parameters
-    # (SVR does not support partial_fit, so we re-fit, but you could use warm_start for some estimators)
-    # Limit number of samples for SVR fitting to speed up (e.g., 2000)
-    max_svr_samples = 2000
-    if len(X_calib_scaled) > max_svr_samples:
-        print(f"[INFO] Limiting SVR fitting to first {max_svr_samples} samples out of {len(X_calib_scaled)}.")
-        X_fit = X_calib_scaled[:max_svr_samples]
-        y_fit = y_calib[:max_svr_samples]
-    else:
-        X_fit = X_calib_scaled
-        y_fit = y_calib
-    # Use linear kernel for much faster fitting
-    svr = SVR(kernel='linear')
-    # Only set valid SVR parameters from base_model
-    valid_params = svr.get_params().keys()
-    base_params = {k: v for k, v in base_model.get_params().items() if k in valid_params}
-    svr.set_params(**base_params)
-    print(f"[DEBUG] Fitting SVR with kernel='linear' on {len(X_fit)} samples...")
-    svr.fit(X_fit, y_fit)
-
+    svr = SVR().fit(X_calib_scaled, y_calib)
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
+    user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
     dump(svr, user_model_path)
-    print(f"[AUTO] User SVR model saved: {user_model_path}")
+    dump(scaler, user_scaler_path)
+    print(f"[AUTO] User SVR model and scaler saved: {user_model_path}, {user_scaler_path}")
 
     # --- Evaluate new model ---
     y_new_pred = svr.predict(X_calib_scaled)
@@ -492,10 +446,25 @@ def main():
     print(f"Checking for user-specific model and scaler for user: {user_id}")
     user_model_path = os.path.join(MODEL_DIR, f'{user_id}_svr_model.joblib')
     user_scaler_path = os.path.join(MODEL_DIR, f'{user_id}_scaler.joblib')
+    baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
+    scaler = None
+    svr = None
+    # Robustly load per-user scaler/model, refit if shape mismatch
     if os.path.exists(user_model_path) and os.path.exists(user_scaler_path):
         print(f"Loading user-specific model and scaler for user {user_id}...")
         svr = load(user_model_path)
         scaler = load(user_scaler_path)
+        # Check scaler shape matches expected features
+        try:
+            calib_df = pd.read_csv(baseline_csv)
+            X_calib = calib_df[FEATURE_ORDER].values
+            if hasattr(scaler, 'n_features_in_') and scaler.n_features_in_ != X_calib.shape[1]:
+                print(f"[WARN] User scaler shape mismatch (expected {X_calib.shape[1]}, got {scaler.n_features_in_}). Refitting scaler...")
+                scaler = StandardScaler().fit(X_calib)
+                dump(scaler, user_scaler_path)
+                print(f"[INFO] Refitted and saved user scaler: {user_scaler_path}")
+        except Exception as e:
+            print(f"[ERROR] Could not check/refit user scaler: {e}")
         print("User-specific model and scaler loaded.")
     else:
         print(f"User-specific model/scaler not found. Loading or training global model...")

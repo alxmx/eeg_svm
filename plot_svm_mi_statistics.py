@@ -18,6 +18,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import classification_report, mean_squared_error, mean_absolute_error, r2_score
 from eeg_mindfulness_index import load_eeg_csv, bandpass_filter, WINDOW_SEC, FS
 import glob
+import seaborn as sns
+from matplotlib.backends.backend_pdf import PdfPages
 
 # --- Parameters ---
 DATA_DIR = 'data/toClasify'
@@ -235,6 +237,95 @@ def plot_regression_statistics():
     pdf.savefig(fig)
     pdf.close()
     print("Regression report PDF generated: svm_mi_regression_report.pdf")
+
+def safe_log_ratio(num, denom, eps=1e-6):
+    """Numerically stable log-ratio."""
+    return np.log(num + eps) - np.log(denom + eps)
+
+def compute_advanced_eeg_features_from_bandpower(bandpower_df):
+    """
+    Compute advanced EEG features from a DataFrame with band power columns.
+    Expects columns like 'C3_alpha', 'C4_alpha', 'Fz_theta', 'Pz_alpha', etc.
+    Returns a DataFrame with new feature columns.
+    """
+    features = pd.DataFrame(index=bandpower_df.index)
+    # FAA
+    features['FAA'] = safe_log_ratio(bandpower_df['C4_alpha'], bandpower_df['C3_alpha'])
+    # Cognitive Load: Frontal theta / Parietal alpha
+    features['theta_alpha_ratio'] = bandpower_df['Fz_theta'] / (bandpower_df['Pz_alpha'] + 1e-6)
+    # Engagement Index
+    beta = bandpower_df['Fz_beta'] + bandpower_df['Cz_beta'] + bandpower_df['Pz_beta']
+    alpha = bandpower_df['Fz_alpha'] + bandpower_df['Cz_alpha'] + bandpower_df['Pz_alpha']
+    theta = bandpower_df['Fz_theta'] + bandpower_df['Cz_theta'] + bandpower_df['Pz_theta']
+    features['engagement_index'] = beta / (alpha + theta + 1e-6)
+    # Attention
+    features['attention_ratio'] = bandpower_df['Cz_beta'] / (bandpower_df['Cz_alpha'] + 1e-6)
+    return features
+
+def plot_advanced_eeg_features(features_df, output_prefix):
+    """
+    Generate and save time series and distribution plots for advanced EEG features.
+    Returns list of saved plot filenames.
+    """
+    plot_files = []
+    # Time series
+    plt.figure(figsize=(12, 8))
+    for i, col in enumerate(features_df.columns, 1):
+        plt.subplot(4, 1, i)
+        plt.plot(features_df[col], label=col)
+        plt.title(f"{col} over time")
+        plt.xlabel('Window')
+        plt.ylabel(col)
+        plt.legend()
+    plt.tight_layout()
+    ts_path = f"{output_prefix}_advanced_eeg_features_timeseries.png"
+    plt.savefig(ts_path)
+    plt.close()
+    plot_files.append(ts_path)
+    # Distributions
+    plt.figure(figsize=(12, 8))
+    for i, col in enumerate(features_df.columns, 1):
+        plt.subplot(2, 2, i)
+        sns.histplot(features_df[col], kde=True)
+        plt.title(f"{col} distribution")
+        plt.xlabel(col)
+    plt.tight_layout()
+    dist_path = f"{output_prefix}_advanced_eeg_features_distribution.png"
+    plt.savefig(dist_path)
+    plt.close()
+    plot_files.append(dist_path)
+    return plot_files
+
+def append_advanced_eeg_features_to_pdf_report(pdf_path, features_df, plot_files):
+    """
+    Append advanced EEG feature summary and plots to an existing PDF report.
+    """
+    with PdfPages(pdf_path) as pdf:
+        # Summary stats page
+        fig, ax = plt.subplots(figsize=(8.5, 6))
+        ax.axis('off')
+        text = 'Advanced EEG Feature Summary\n\n'
+        for col in features_df.columns:
+            mean = features_df[col].mean()
+            std = features_df[col].std()
+            text += f"{col}: mean={mean:.3f}, std={std:.3f}\n"
+        ax.text(0.05, 0.95, text, va='top', fontsize=12)
+        pdf.savefig(fig)
+        plt.close(fig)
+        # Add plots
+        for plot_file in plot_files:
+            img = plt.imread(plot_file)
+            fig, ax = plt.subplots(figsize=(8.5, 6))
+            ax.imshow(img)
+            ax.axis('off')
+            pdf.savefig(fig)
+            plt.close(fig)
+
+# Example usage in your session pipeline:
+# bandpower_df = pd.read_csv('bandpower_session.csv')
+# features_df = compute_advanced_eeg_features_from_bandpower(bandpower_df)
+# plot_files = plot_advanced_eeg_features(features_df, output_prefix='user1_session1')
+# append_advanced_eeg_features_to_pdf_report('user1_session1_report.pdf', features_df, plot_files)
 
 if __name__ == "__main__":
     plot_statistics()

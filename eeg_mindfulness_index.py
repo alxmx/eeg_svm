@@ -81,7 +81,7 @@ MI_WEIGHTS = {
     'alpha_po': 0.25,
     'faa': 0.20,
     'beta_frontal': -0.15,  # Beta activity is correlated with mental concentration and active thinking
-    'eda_norm': -0.25  # EDA is negatively correlated with mindfulness
+    'eda_norm': -0.15  # EDA is negatively correlated with mindfulness
 }
 
 # Behavioral state thresholds
