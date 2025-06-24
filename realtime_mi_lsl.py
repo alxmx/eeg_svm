@@ -37,6 +37,7 @@ import json
 import scipy.signal
 import seaborn as sns
 from sklearn.metrics import mean_absolute_error, r2_score
+import glob
 
 # --- CONFIG ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1288,10 +1289,6 @@ def merge_reports_to_excel_and_pdf(user_id=None):
 # This ensures consistent feature scaling and reliable predictions.
 
 if __name__ == "__main__":
-    # Ask if user wants to run diagnostics
-    diagnostics_choice = input("\nDo you want to run MI calculation diagnostics? (y/n): ").strip().lower()
-    if diagnostics_choice == 'y':
-        diagnose_mi_calculation()
     main()
 
 # --- Analysis and Visualization (separate section, not part of the pipeline) ---
@@ -1327,154 +1324,3 @@ sns.pairplot(df[feature_names])
 plt.savefig('feature_pairplot.png')
 plt.show()
 """
-
-def diagnose_mi_calculation():
-    """
-    Run diagnostic tests on MI calculation with sample data to identify issues.
-    Use this function when getting consistent 0 values for MI.
-    """
-    print("\n====== MI CALCULATION DIAGNOSTIC REPORT ======\n")
-    
-    # 1. Test with ideal values that should give high MI
-    ideal_features = np.array([100, 50, 0.5, 10, 1])  # High theta, alpha, moderate FAA, etc.
-    print("TEST CASE 1: Ideal values that should give high MI")
-    ideal_mi = calculate_mi_debug(ideal_features)
-    print(f"Result: MI = {ideal_mi}\n")
-    
-    # 2. Test with zero values
-    zero_features = np.array([0,  0, 0, 0, 0])
-    print("TEST CASE 2: All zero values")
-    zero_mi = calculate_mi_debug(zero_features)
-    print(f"Result: MI = {zero_mi}\n")
-    
-    # 3. Test with typical real data ranges
-    typical_features = np.array([25, 10, 0.2, 15, 5])
-    print("TEST CASE 3: Typical real data ranges")
-    typical_mi = calculate_mi_debug(typical_features)
-    print(f"Result: MI = {typical_mi}\n")
-    
-    # 4. Test with custom weight sets to see what produces better variations
-    print("TEST CASE 4: Testing different weight configurations")
-    test_weights = [
-        [0.25, 0.25, 0.2, -0.15, -0.1],  # Default
-        [0.5, 0.5, 0.5, -0.25, -0.25],   # Stronger weights
-        [0.1, 0.1, 0.1, -0.05, -0.05],   # Weaker weights
-    ]
-    
-    for i, weights in enumerate(test_weights):
-        print(f"Weight set {i+1}: {weights}")
-        weights = np.array(weights)
-        raw_mi = np.dot(typical_features, weights) - 1
-        mi = 1 / (1 + np.exp(-raw_mi))
-        print(f"Result with typical features: MI = {mi}\n")
-    
-    # 5. Test with different offset values
-    print("TEST CASE 5: Testing different offset values")
-    offsets = [-2, -1, -0.5, 0, 0.5]
-    for offset in offsets:
-        raw_mi = np.dot(typical_features, np.array([0.25, 0.25, 0.2, -0.15, -0.1])) - offset
-        mi = 1 / (1 + np.exp(-raw_mi))
-        print(f"Offset {offset}: MI = {mi}")
-    
-    print("\n====== END OF DIAGNOSTIC REPORT ======\n")
-    
-    print("RECOMMENDATIONS:")
-    print("1. If all test cases give 0, check for calculation issues or Python errors")
-    print("2. If only your real data gives 0, your feature values may be outside expected ranges")
-    print("3. Consider adjusting weights or offset based on the tests above")
-    print("4. Add print statements in your feature extraction code to verify values")
-    print("5. Examine your calibration data CSV to verify feature quality")
-    
-    # Return whether any of our tests produced reasonable values
-    has_variation = abs(ideal_mi - zero_mi) > 0.1
-    return has_variation
-
-# You can run this by adding the following to your main() function or console:
-# diagnose_mi_calculation()
-
-def calculate_raw_mi(features):
-    """
-    Calculate raw mindfulness index (before sigmoid transformation).
-    This gives a more dynamic range of values.
-    """
-    normalized_features = np.array(features, dtype=float)
-    for i in range(len(normalized_features)):
-        if abs(normalized_features[i]) > 100000:
-            sign = np.sign(normalized_features[i])
-            normalized_features[i] = sign * np.log10(abs(normalized_features[i]))
-    
-    # Use standard weights
-    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
-    
-    # Calculate raw MI without sigmoid transformation
-    feature_scale = max(1.0, np.mean(np.abs(normalized_features)) / 50)
-    offset = min(1.0, 0.2 * feature_scale)
-    
-    raw_mi = np.dot(normalized_features, weights) - offset
-    # Clip to reasonable range but allow more variation
-    raw_mi_clipped = np.clip(raw_mi, -5, 5)
-    
-    return raw_mi_clipped
-
-def calculate_emi(features):
-    """
-    Calculate Emotional Mindfulness Index (EMI).
-    EMI emphasizes emotional control aspects by giving more weight to frontal alpha asymmetry (FAA)
-    and electrodermal activity (EDA).
-    """
-    normalized_features = np.array(features, dtype=float)
-    for i in range(len(normalized_features)):
-        if abs(normalized_features[i]) > 100000:
-            sign = np.sign(normalized_features[i])
-            normalized_features[i] = sign * np.log10(abs(normalized_features[i]))
-    
-    # Modified weights emphasizing emotional features
-    # [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-    emi_weights = np.array([0.15, 0.15, 0.35, -0.15, -0.20])  # More weight on FAA and EDA
-    
-    # Calculate EMI
-    raw_emi = np.dot(normalized_features, emi_weights) - 0.8  # Different offset for EMI
-    raw_emi = np.clip(raw_emi, -50, 50)  # Prevent overflow
-    emi = 1 / (1 + np.exp(-raw_emi))
-    
-    # Add dynamic factor to make EMI more responsive
-    dynamic_factor = np.std(normalized_features) * 0.2
-    emi = min(1.0, emi * (1 + dynamic_factor))
-    
-    return emi
-
-def setup_mindfulness_lsl_streams():
-    """
-    Setup multiple LSL output streams for different mindfulness indices.
-    Returns a dictionary containing all the outlets.
-    """
-    from pylsl import StreamInfo, StreamOutlet
-
-    # Standard MI output
-    mi_info = StreamInfo('processed_MI', 'MI', 1, 1, 'float32', 'mi_stream')
-    mi_outlet = StreamOutlet(mi_info)
-    print("Created LSL output stream 'processed_MI' for MI values")
-
-    # Raw MI values (more dynamic range)
-    raw_mi_info = StreamInfo('raw_MI', 'RawMI', 1, 1, 'float32', 'raw_mi_stream')
-    raw_mi_outlet = StreamOutlet(raw_mi_info)
-    print("Created LSL output stream 'raw_MI' for raw MI values (more dynamic range)")
-
-    # Emotional mindfulness index
-    emi_info = StreamInfo('EMI', 'EmotionalMI', 1, 1, 'float32', 'emi_stream')
-    emi_outlet = StreamOutlet(emi_info)
-    print("Created LSL output stream 'EMI' for Emotional Mindfulness Index")
-
-    return {
-        'mi': mi_outlet,
-        'raw_mi': raw_mi_outlet,
-        'emi': emi_outlet
-    }
-
-def remap_raw_mi(raw_mi, min_val=-5, max_val=5):
-    """
-    Remap raw MI from [min_val, max_val] to [0, 1] using min-max scaling.
-    Values outside the range are clipped.
-    """
-    raw_mi_clipped = np.clip(raw_mi, min_val, max_val)
-    return (raw_mi_clipped - min_val) / (max_val - min_val)
