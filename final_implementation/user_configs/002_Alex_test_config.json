@@ -1,0 +1,6 @@
+{
+  "user_id": "002_Alex_test",
+  "baseline_csv": "C:\\Users\\lenin\\Documents\\GitHub\\eeg_svm\\final_implementation\\user_configs\\002_Alex_test_baseline.csv",
+  "calibration_time": "2025-06-25 17:13:46.076885",
+  "n_samples": 15000
+}

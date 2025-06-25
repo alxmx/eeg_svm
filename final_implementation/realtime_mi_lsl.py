@@ -141,7 +141,7 @@ def compute_bandpower(data, sf, band, window_sec=None, relative=False):
 
 def scale_features_for_mi(features):
     """
-    Scale features to comparable ranges for proper MI calculation.
+    Scale features to comparable ranges for proper MI calculation with robust scaling.
     This addresses the critical issue where different feature magnitudes
     cause unbalanced contributions to the final MI value.
     
@@ -153,23 +153,46 @@ def scale_features_for_mi(features):
     Returns:
     --------
     scaled_features : numpy array
-        Features scaled to comparable ranges for balanced MI calculation
+        Features scaled to comparable ranges (0-10) for balanced MI calculation
     """
     theta_fz, alpha_po, faa, beta_frontal, eda_norm = features
     
-    # Convert EEG power values from scientific notation to more reasonable scale
-    # Multiply by 1e6 to convert from ~1e-6 to ~1.0 range
-    theta_scaled = theta_fz * 1e6
-    alpha_scaled = alpha_po * 1e6
-    beta_scaled = beta_frontal * 1e6
+    # Robust scaling for EEG features (handle both tiny and normal values)
+    def robust_scale_eeg(value, target_range=10):
+        if abs(value) < 1e-12:  # Very small values
+            return value * 1e12 * target_range
+        elif abs(value) < 1e-6:  # Small values
+            return value * 1e6 * target_range
+        elif abs(value) < 1e-3:  # Medium values
+            return value * 1e3 * target_range
+        else:  # Large values
+            return value * target_range
     
-    # FAA is already in good range (~-0.5 to +0.5), keep as-is
-    faa_scaled = faa
+    # Robust scaling for EDA (handle extreme values)
+    def robust_scale_eda(value, target_range=10):
+        if abs(value) > 1e6:  # Extremely large values
+            return np.clip(np.log10(abs(value) + 1), 0, target_range) * np.sign(value)
+        elif abs(value) > 1e3:  # Large values
+            return np.clip(value / 1e3, 0, target_range) * np.sign(value)
+        elif abs(value) < 1e-6:  # Very small values
+            return value * 1e6 * target_range
+        else:  # Normal range
+            return value * target_range
     
-    # Scale EDA to comparable range
-    eda_scaled = eda_norm * 1e6
+    # Scale each feature to comparable range (0-10)
+    theta_scaled = robust_scale_eeg(theta_fz)
+    alpha_scaled = robust_scale_eeg(alpha_po)
+    beta_scaled = robust_scale_eeg(beta_frontal)
     
+    # FAA is already in good range (~-0.5 to +0.5), scale to 0-10 range
+    faa_scaled = (faa + 1) * 5  # Maps -1 to 1 range to 0-10 range
+    
+    # Scale EDA with robust handling of extreme values
+    eda_scaled = robust_scale_eda(eda_norm)
+    
+    # Clamp all values to prevent overflow in exponential functions
     scaled_features = np.array([theta_scaled, alpha_scaled, faa_scaled, beta_scaled, eda_scaled])
+    scaled_features = np.clip(scaled_features, -50, 50)  # Prevent exp() overflow
     
     return scaled_features
 
@@ -186,21 +209,22 @@ def calculate_mi_scaled(features):
     # These weights are designed for the scaled feature ranges
     weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
     
-    # Calculate weighted sum
+    # Calculate weighted sum with clamping to prevent overflow
     raw_mi = np.dot(scaled_features, weights)
+    raw_mi = np.clip(raw_mi, -50, 50)  # Prevent exp() overflow
     
     # Apply sigmoid with adjusted parameters for scaled features
     # Offset adjusted for the new feature scale
     mi = 1 / (1 + np.exp(-(raw_mi - 0.5)))
     
-    return mi
+    return np.clip(mi, 0, 1)  # Ensure output is in valid range
 
 def calculate_raw_mi_scaled(features):
     """Calculate raw MI (pre-sigmoid) using scaled features for more dynamic range"""
     scaled_features = scale_features_for_mi(features)
     weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
     raw_mi = np.dot(scaled_features, weights) - 0.5
-    return raw_mi
+    return np.clip(raw_mi, -50, 50)  # Prevent overflow in downstream calculations
 
 def calculate_emi_scaled(features):
     """Calculate Emotional Mindfulness Index using scaled features"""
@@ -208,26 +232,32 @@ def calculate_emi_scaled(features):
     # EMI gives more weight to frontal alpha asymmetry (FAA) and EDA
     weights = np.array([0.15, 0.15, 0.4, -0.1, -0.2])
     emi_raw = np.dot(scaled_features, weights) - 0.3
+    emi_raw = np.clip(emi_raw, -50, 50)  # Prevent exp() overflow
     emi = 1 / (1 + np.exp(-2 * emi_raw))
-    return emi
+    return np.clip(emi, 0, 1)  # Ensure output is in valid range
 
 def calculate_raw_mi(features):
     """Calculate raw MI (pre-sigmoid) for more dynamic range"""
     weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
     raw_mi = np.dot(features, weights) - 0.5
-    return raw_mi
+    return np.clip(raw_mi, -50, 50)  # Prevent overflow
 
 def remap_raw_mi(raw_mi):
     """Remap raw MI to 0-1 range with scaled sigmoid for LSL output"""
+    # Clamp input to prevent overflow
+    raw_mi = np.clip(raw_mi, -50, 50)
     # Apply scaled sigmoid remapping
     mi_remapped = 1 / (1 + np.exp(-3 * raw_mi))
-    return mi_remapped
+    return np.clip(mi_remapped, 0, 1)
 
 def calculate_emi(features):
     """Calculate Emotional Mindfulness Index - more sensitive to emotional features"""
     # EMI gives more weight to frontal alpha asymmetry (FAA) and EDA
     weights = np.array([0.15, 0.15, 0.4, -0.1, -0.2])
     emi_raw = np.dot(features, weights) - 0.3
+    emi_raw = np.clip(emi_raw, -50, 50)  # Prevent overflow
+    emi = 1 / (1 + np.exp(-2 * emi_raw))
+    return np.clip(emi, 0, 1)
     emi = 1 / (1 + np.exp(-2 * emi_raw))
     return emi
 
@@ -616,7 +646,7 @@ def calibrate_user(user_id, calibration_duration_sec=60):
             alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
             faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
             beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
-            eda_norm = np.mean(eda_win[:,1])
+            eda_norm = np.mean(eda_win[:,1])  # Will be normalized by robust scaling later
             
             print(f"[DEBUG CALIB] EDA_NORM = {eda_norm:.6f}")
             
@@ -1239,10 +1269,10 @@ def main():
         alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
         faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
         beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
-        eda_norm = np.mean(eda_win[:,1])
+        eda_norm = normalize_eda_robust(eda_win[:,1])
         
         # --- Debug EDA normalization ---
-        print(f"[DEBUG] EDA_NORM calculation: mean of channel 1 = {eda_norm:.6f}")
+        print(f"[DEBUG] EDA_NORM calculation: robust normalized = {eda_norm:.6f}")
         print(f"[DEBUG] EDA channel 1 raw values (first 10): {eda_win[:10,1]}")
         
         features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
@@ -1648,3 +1678,41 @@ print("Feature pairplot saved to feature_pairplot.png")
 # --- MAIN ENTRY POINT ---
 if __name__ == "__main__":
     main()
+
+def normalize_eda_robust(eda_values):
+    """
+    Robust EDA normalization that handles extreme values and prevents overflow.
+    
+    Parameters:
+    -----------
+    eda_values : array-like
+        Raw EDA values that may contain extreme values
+    
+    Returns:
+    --------
+    normalized_eda : float
+        Normalized EDA value in a reasonable range
+    """
+    if len(eda_values) == 0:
+        return 0.0
+    
+    # Calculate mean of raw values
+    raw_mean = np.mean(eda_values)
+    
+    # Handle extreme values with robust scaling
+    if abs(raw_mean) > 1e6:  # Extremely large values (millions)
+        # Use log scaling for very large values
+        normalized = np.log10(abs(raw_mean) + 1) * np.sign(raw_mean)
+        # Scale to reasonable range (0-100)
+        normalized = np.clip(normalized, -10, 10)
+    elif abs(raw_mean) > 1e3:  # Large values (thousands)
+        # Scale down large values
+        normalized = raw_mean / 1e3
+        normalized = np.clip(normalized, -100, 100)
+    elif abs(raw_mean) < 1e-6:  # Very small values
+        # Scale up very small values
+        normalized = raw_mean * 1e6
+    else:  # Normal range values
+        normalized = raw_mean
+    
+    return float(normalized)
