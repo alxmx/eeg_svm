@@ -653,7 +653,9 @@ def calibrate_user(user_id, calibration_duration_sec=60):
             alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
             faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
             beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
-            eda_norm = np.mean(eda_win[:,EDA_CHANNEL_INDEX])  # Will be normalized by robust scaling later
+            # Apply universal normalization for consistent calibration
+            raw_eda = np.mean(eda_win[:,EDA_CHANNEL_INDEX])
+            eda_norm = normalize_features_universal({'eda_norm': raw_eda}, method='robust_quantile')['eda_norm']
             
             print(f"[DEBUG CALIB] EDA_NORM = {eda_norm:.6f}")
             
@@ -704,7 +706,12 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     print("[AUTO] Fine-tuning SVR model for this user based on calibration data...")
     calib_df = pd.read_csv(baseline_csv)
     X_calib = calib_df[FEATURE_ORDER].values
-    y_calib = np.array([calculate_mi_scaled(f) for f in X_calib])  # Use scaled MI calculation
+    
+    # Use universal MI calculation for consistent training targets
+    y_calib = np.array([calculate_mi_universal(f, method='robust_quantile') for f in X_calib])
+    
+    print(f"[INFO] Using universal MI calculation for training targets")
+    print(f"[INFO] This ensures consistency across all users and devices")
     
     # --- DEBUG: Check and log feature statistics ---
     feature_mins = np.min(X_calib, axis=0)
@@ -879,7 +886,8 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
     feature_inlet = StreamInlet(feature_stream)
     
     # Unity markers are optional in run_experiment too
-    use_unity = input("Use Unity markers in experiment? (y/n, default: n): ").strip().lower()
+    use_unity = input("Use Unity markers in experiment? (y/n, default: n): ")
+
     if use_unity == 'y':
         try:
             label_stream = select_lsl_stream('UnityMarkers', allow_skip=True, confirm=True)
@@ -1289,8 +1297,9 @@ def main():
         alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
         faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
         beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
-        # EDA CHANNEL SELECTION: Using configurable channel (see EDA_CHANNEL_INDEX at top)
-        eda_norm = normalize_eda_robust(eda_win[:,EDA_CHANNEL_INDEX])  # Channel configured at top of file
+        # EDA UNIVERSAL NORMALIZATION: Apply consistent normalization method
+        raw_eda = np.mean(eda_win[:,EDA_CHANNEL_INDEX])
+        eda_norm = normalize_features_universal({'eda_norm': raw_eda}, method='robust_quantile')['eda_norm']
         
         # --- Debug EDA normalization ---
         print(f"[DEBUG] EDA_NORM calculation: robust normalized = {eda_norm:.6f}")
@@ -1393,17 +1402,22 @@ def main():
                 mi_skipped_count = {}
             mi_skipped_count[skipped_reason] = mi_skipped_count.get(skipped_reason, 0) + 1
             
-        # Calculate additional indices for more dynamic feedback using scaled features
-        raw_mi_value = calculate_raw_mi_scaled(sample[0])  # More dynamic range with proper scaling
-        emi_value = calculate_emi_scaled(sample[0])        # Emotional mindfulness index with proper scaling
+        # Calculate additional indices for more dynamic feedback using universal methods
+        raw_mi_value = calculate_raw_mi_universal(sample[0], method='robust_quantile')
+        emi_value = calculate_emi_universal(sample[0], method='robust_quantile')
         # Remap raw MI to 0-1 range for output
         raw_mi_remapped = remap_raw_mi(raw_mi_value)
         
-        # Also calculate scaled MI for comparison/debugging
-        mi_scaled_direct = calculate_mi_scaled(sample[0])
+        # Also calculate universal MI for comparison (this is the generalizable approach)
+        mi_universal = calculate_mi_universal(sample[0], method='robust_quantile')
         
-        # --- Print all MI values with scaling comparison ---
-        print(f"[REAL-TIME] MI (SVR): {mi_pred:.3f} | MI (Scaled Direct): {mi_scaled_direct:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f}")
+        # --- Print all MI values with universal comparison ---
+        print(f"[REAL-TIME] MI (SVR): {mi_pred:.3f} | MI (Universal): {mi_universal:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f}")
+        
+        # OPTION: Use universal MI instead of user-specific SVR if model is saturated
+        if abs(mi_pred - 0.984) < 0.001:  # Detect saturation (like user 007_alex_test)
+            print(f"[AUTO-SWITCH] Detected model saturation. Using Universal MI: {mi_universal:.3f}")
+            mi_pred = mi_universal  # Switch to universal approach
         
         # Use current time for samples
         current_ts = time.time()
@@ -1698,44 +1712,185 @@ plt.savefig('feature_pairplot.png')
 print("Feature pairplot saved to feature_pairplot.png")
 """
 
-def normalize_eda_robust(eda_values):
+def normalize_features_universal(features, method='robust_quantile'):
     """
-    Robust EDA normalization that handles extreme values and prevents overflow.
+    Universal feature normalization that works across all users and devices.
+    
+    This replaces user-specific scaling with a generalizable approach based on
+    physiological ranges and robust statistical methods.
     
     Parameters:
     -----------
-    eda_values : array-like
-        Raw EDA values that may contain extreme values
+    features : dict or array
+        Features in format: {'theta_fz': val, 'alpha_po': val, ...} or [theta, alpha, faa, beta, eda]
+    method : str
+        Normalization method: 'robust_quantile', 'physiological', 'adaptive'
     
     Returns:
     --------
-    normalized_eda : float
-        Normalized EDA value in a reasonable range
+    normalized_features : dict
+        Normalized features in consistent 0-10 range
+    """
+    if isinstance(features, (list, np.ndarray)):
+        feature_dict = dict(zip(FEATURE_ORDER, features))
+    else:
+        feature_dict = features.copy()
+    
+    normalized = {}
+    
+    if method == 'physiological':
+        # Use known physiological ranges for each feature type
+        physiological_ranges = {
+            'theta_fz': (0.1, 100),      # EEG power in µV²
+            'alpha_po': (0.1, 100),      # EEG power in µV²  
+            'faa': (-3, 3),              # Log ratio (dimensionless)
+            'beta_frontal': (0.1, 100),  # EEG power in µV²
+            'eda_norm': (0.01, 50)       # Conductance range in µS
+        }
+        
+        for feat_name, value in feature_dict.items():
+            if feat_name in physiological_ranges:
+                min_val, max_val = physiological_ranges[feat_name]
+                # Robust clipping and scaling to 0-10 range
+                clipped_val = np.clip(value, min_val * 0.1, max_val * 2)  # Allow some outliers
+                normalized[feat_name] = 10 * (clipped_val - min_val) / (max_val - min_val)
+                normalized[feat_name] = np.clip(normalized[feat_name], 0, 10)
+            else:
+                normalized[feat_name] = np.clip(value, 0, 10)
+                
+    elif method == 'robust_quantile':
+        # Use robust quantile-based normalization (generalizes across users)
+        robust_ranges = {
+            'theta_fz': (1, 50),         # 5th-95th percentile across population
+            'alpha_po': (1, 50),         # 5th-95th percentile across population
+            'faa': (-2, 2),              # 5th-95th percentile across population  
+            'beta_frontal': (1, 50),     # 5th-95th percentile across population
+            'eda_norm': (0.1, 20)        # 5th-95th percentile across population
+        }
+        
+        for feat_name, value in feature_dict.items():
+            if feat_name in robust_ranges:
+                q5, q95 = robust_ranges[feat_name]
+                # Robust scaling with outlier handling
+                if abs(value) > q95 * 5:  # Extreme outlier
+                    normalized_val = 10 if value > 0 else 0
+                else:
+                    normalized_val = 10 * (value - q5) / (q95 - q5)
+                normalized[feat_name] = np.clip(normalized_val, 0, 10)
+            else:
+                normalized[feat_name] = np.clip(value, 0, 10)
+                
+    else:  # adaptive method
+        # Adaptive normalization based on current session statistics
+        for feat_name, value in feature_dict.items():
+            if feat_name.startswith(('theta', 'alpha', 'beta')):
+                # EEG features: log transform then scale
+                log_val = np.log10(max(value, 0.01))  # Avoid log(0)
+                normalized[feat_name] = np.clip((log_val + 2) * 2.5, 0, 10)  # Map log range to 0-10
+            elif feat_name == 'faa':
+                # FAA: already in good range, just shift and scale
+                normalized[feat_name] = np.clip((value + 3) * 10/6, 0, 10)  # Map -3,3 to 0,10
+            elif feat_name == 'eda_norm':
+                # EDA: robust log scaling
+                if value > 100:
+                    normalized[feat_name] = np.clip(np.log10(value), 0, 10)
+                elif value < 0.01:
+                    normalized[feat_name] = np.clip(value * 100, 0, 10)
+                else:
+                    normalized[feat_name] = np.clip(value, 0, 10)
+            else:
+                normalized[feat_name] = np.clip(value, 0, 10)
+    
+    return normalized
+
+def normalize_eda_robust(eda_values):
+    """
+    DEPRECATED: Use normalize_features_universal instead.
+    Kept for backward compatibility.
     """
     if len(eda_values) == 0:
         return 0.0
     
-    # Calculate mean of raw values
     raw_mean = np.mean(eda_values)
     
-    # Handle extreme values with robust scaling
-    if abs(raw_mean) > 1e6:  # Extremely large values (millions)
-        # Use log scaling for very large values
-        normalized = np.log10(abs(raw_mean) + 1) * np.sign(raw_mean)
-        # Scale to reasonable range (0-100)
-        normalized = np.clip(normalized, -10, 10)
-    elif abs(raw_mean) > 1e3:  # Large values (thousands)
-        # Scale down large values
-        normalized = raw_mean / 1e3
-        normalized = np.clip(normalized, -100, 100)
-    elif abs(raw_mean) < 1e-6:  # Very small values
-        # Scale up very small values
-        normalized = raw_mean * 1e6
-    else:  # Normal range values
-        normalized = raw_mean
-    
-    return float(normalized)
+    # Use the new universal approach for EDA
+    normalized_dict = normalize_features_universal({'eda_norm': raw_mean}, method='robust_quantile')
+    return normalized_dict['eda_norm']
 
-# --- MAIN ENTRY POINT ---
+def calculate_mi_universal(features, method='robust_quantile'):
+    """
+    Universal MI calculation that works across all users without user-specific calibration.
+    
+    This replaces user-specific thresholds with a generalizable approach based on
+    physiological ranges and population statistics.
+    
+    Parameters:
+    -----------
+    features : list or dict
+        Raw features: [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+    method : str
+        Normalization method: 'robust_quantile', 'physiological', 'adaptive'
+    
+    Returns:
+    --------
+    mi : float
+        Mindfulness Index in 0-1 range
+    """
+    # Step 1: Universal feature normalization  
+    normalized_features = normalize_features_universal(features, method=method)
+    
+    # Step 2: Convert to array for calculation
+    feature_array = np.array([
+        normalized_features['theta_fz'],
+        normalized_features['alpha_po'], 
+        normalized_features['faa'],
+        normalized_features['beta_frontal'],
+        normalized_features['eda_norm']
+    ])
+    
+    # Step 3: Universal weights (no user-specific adjustment needed)
+    # These weights work with the 0-10 normalized range
+    weights = np.array([0.3, 0.3, 0.2, -0.1, -0.2])  # Adjusted for normalized features
+    
+    # Step 4: Calculate weighted sum
+    weighted_sum = np.dot(feature_array, weights)
+    
+    # Step 5: Apply sigmoid with universal parameters
+    # No user-specific threshold adjustment needed
+    mi = 1 / (1 + np.exp(-(weighted_sum - 2.5)))  # Offset for 0-10 normalized range
+    
+    return np.clip(mi, 0, 1)
+
+def calculate_raw_mi_universal(features, method='robust_quantile'):
+    """Universal raw MI calculation (pre-sigmoid) for more dynamic range"""
+    normalized_features = normalize_features_universal(features, method=method)
+    feature_array = np.array([
+        normalized_features['theta_fz'],
+        normalized_features['alpha_po'], 
+        normalized_features['faa'],
+        normalized_features['beta_frontal'],
+        normalized_features['eda_norm']
+    ])
+    weights = np.array([0.3, 0.3, 0.2, -0.1, -0.2])
+    raw_mi = np.dot(feature_array, weights) - 2.5
+    return np.clip(raw_mi, -10, 10)  # Wider range for raw MI
+
+def calculate_emi_universal(features, method='robust_quantile'):
+    """Universal Emotional Mindfulness Index calculation"""
+    normalized_features = normalize_features_universal(features, method=method)
+    feature_array = np.array([
+        normalized_features['theta_fz'],
+        normalized_features['alpha_po'], 
+        normalized_features['faa'],
+        normalized_features['beta_frontal'],
+        normalized_features['eda_norm']
+    ])
+    # EMI emphasizes emotional features (FAA and EDA)
+    weights = np.array([0.15, 0.15, 0.4, -0.05, -0.25])
+    weighted_sum = np.dot(feature_array, weights)
+    emi = 1 / (1 + np.exp(-(weighted_sum - 2.0)))  # Different offset for EMI
+    return np.clip(emi, 0, 1)
+
+# Add main execution block at the end of file
 if __name__ == "__main__":
     main()

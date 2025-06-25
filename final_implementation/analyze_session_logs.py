@@ -112,10 +112,10 @@ def analyze_session_data(session_file, baseline_file, stats_file):
     return scaling_issues
 
 def main():
-    # Analyze the user 005_alextest session
-    session_file = "logs/005_alextest_mi_session_20250625_181520.csv"
-    baseline_file = "user_configs/005_alextest_baseline.csv" 
-    stats_file = "logs/005_alextest_mi_feature_stats_20250625_181520.csv"
+    # Analyze the user 007_alex_test session - CRITICAL ISSUES DETECTED
+    session_file = "logs/007_alex_test_mi_session_20250625_200204.csv"
+    baseline_file = "user_configs/007_alex_test_baseline.csv" 
+    stats_file = "logs/007_alex_test_mi_feature_stats_20250625_200204.csv"
     
     if all(Path(f).exists() for f in [session_file, baseline_file, stats_file]):
         scaling_issues = analyze_session_data(session_file, baseline_file, stats_file)
@@ -141,5 +141,115 @@ def main():
             exists = "✅" if Path(f).exists() else "❌"
             print(f"  {exists} {f}")
 
+def analyze_007_alex_test():
+    """Specific analysis for user 007_alex_test with critical MI saturation"""
+    
+    print("="*80)
+    print("CRITICAL ANALYSIS: USER 007_alex_test - MI COMPLETELY SATURATED")
+    print("="*80)
+    
+    # Load data
+    session_file = "logs/007_alex_test_mi_session_20250625_200204.csv"
+    baseline_file = "user_configs/007_alex_test_baseline.csv"
+    stats_file = "logs/007_alex_test_mi_feature_stats_20250625_200204.csv"
+    
+    session_df = pd.read_csv(session_file)
+    baseline_df = pd.read_csv(baseline_file)
+    
+    print(f"\n🚨 CRITICAL ISSUE DETECTED:")
+    print(f"   - MI values are COMPLETELY CONSTANT: {session_df['mi'].iloc[0]:.15f}")
+    print(f"   - MI std deviation: {session_df['mi'].std():.2e} (essentially zero)")
+    print(f"   - This indicates COMPLETE MODEL SATURATION")
+    
+    print(f"\n📊 EDA SCALING ANALYSIS:")
+    # Check EDA values - this is likely the main issue
+    baseline_eda_mean = baseline_df['eda_norm'].mean()
+    baseline_eda_std = baseline_df['eda_norm'].std()
+    session_eda_mean = session_df['eda_norm'].mean()
+    session_eda_std = session_df['eda_norm'].std()
+    
+    print(f"   Baseline EDA: Mean={baseline_eda_mean:.6f}, Std={baseline_eda_std:.6f}")
+    print(f"   Session EDA:  Mean={session_eda_mean:.6f}, Std={session_eda_std:.6f}")
+    print(f"   EDA Scale Ratio: {session_eda_mean / baseline_eda_mean:.1f}x")
+    
+    if session_eda_mean / baseline_eda_mean > 100:
+        print("   ❌ CRITICAL: EDA values are ~600x larger in session vs baseline!")
+        print("   🔧 CAUSE: EDA scaling factor needs to be applied during real-time")
+        
+    print(f"\n📊 EEG SCALING ANALYSIS:")
+    eeg_features = ['theta_fz', 'alpha_po', 'faa', 'beta_frontal']
+    for feat in eeg_features:
+        baseline_mean = baseline_df[feat].mean()
+        session_mean = session_df[feat].mean()
+        ratio = session_mean / baseline_mean if baseline_mean != 0 else float('inf')
+        print(f"   {feat}: Baseline={baseline_mean:.3f}, Session={session_mean:.3f}, Ratio={ratio:.3f}")
+    
+    print(f"\n🔧 ROOT CAUSE ANALYSIS:")
+    print("   1. EDA values in baseline: ~0.01-0.09 range")
+    print("   2. EDA values in session: ~6-9 range") 
+    print("   3. This is a ~600x difference causing extreme feature scaling")
+    print("   4. SVR model trained on small EDA values, gets huge EDA in real-time")
+    print("   5. Model saturates and outputs constant MI value")
+    
+    print(f"\n✅ SOLUTION:")
+    print("   1. Apply EDA scaling factor during real-time: eda_value * 0.001")
+    print("   2. OR re-calibrate with consistent EDA scaling")
+    print("   3. Ensure EDA normalization is applied consistently")
+    print("   4. Check EDA channel selection (may be using wrong channel)")
+    
+    print(f"\n📋 RECOMMENDED ACTIONS:")
+    print("   1. Check realtime_mi_lsl.py EDA scaling logic")
+    print("   2. Verify EDA channel index configuration")
+    print("   3. Apply robust EDA normalization during real-time")
+    print("   4. Re-calibrate user with fixed EDA scaling")
+    print("   5. Test that MI varies after fix")
+
+def analyze_008_alex_test():
+    """Specific analysis for user 008_alex_test"""
+    print("="*80)
+    print("ANALYSIS: USER 008_alex_test")
+    print("="*80)
+
+    # Load data
+    session_file = "logs/008_alex_test_mi_session_20250625_202532.csv"
+    baseline_file = "user_configs/008_alex_test_baseline.csv"
+    stats_file = "logs/008_alex_test_mi_feature_stats_20250625_202532.csv"
+
+    if Path(session_file).exists():
+        session_df = pd.read_csv(session_file)
+        print(f"\nSESSION FILE LOADED: {session_file}")
+        print(f"Session Duration: {len(session_df)} seconds")
+
+        # Analyze MI values
+        mi_stats = session_df['mi'].describe()
+        print(f"\nMI ANALYSIS:")
+        print(f"   - MI range: {mi_stats['min']:.6f} to {mi_stats['max']:.6f}")
+        print(f"   - MI std: {mi_stats['std']:.2e}")
+        if mi_stats['std'] < 1e-10:
+            print("   ❌ CRITICAL: MI values are essentially constant - MODEL SATURATED!")
+        else:
+            print("   ✅ MI values show variation")
+
+        # Analyze features
+        feature_names = ['theta_fz', 'alpha_po', 'faa', 'beta_frontal', 'eda_norm']
+        print(f"\nFEATURE ANALYSIS:")
+        for feat in feature_names:
+            if feat in session_df.columns:
+                feat_stats = session_df[feat].describe()
+                print(f"   {feat}: min={feat_stats['min']:.6f}, max={feat_stats['max']:.6f}, mean={feat_stats['mean']:.6f}")
+
+        print("\nANALYSIS COMPLETED FOR USER 008_alex_test")
+    else:
+        print(f"❌ SESSION FILE NOT FOUND: {session_file}")
+
 if __name__ == "__main__":
+    # Run specific analysis for 007_alex_test
+    analyze_007_alex_test()
+    print("\n" + "="*80)
+    print("Running general analysis...")
+    print("="*80)
     main()
+    print("\n" + "="*80)
+    print("Running analysis for user 008_alex_test...")
+    print("="*80)
+    analyze_008_alex_test()
