@@ -56,7 +56,8 @@ from sklearn.linear_model import SGDRegressor, LinearRegression
 from sklearn.svm import SVR, SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, r2_score
+from sklearn.metrics import mean_absolute_error, r2_score, precision_score, recall_score
+from scipy.stats import spearmanr
 
 # --- CONFIG ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -126,11 +127,11 @@ def compute_bandpower(data, sf, band, window_sec=None, relative=False):
         idx_band = np.logical_and(freqs >= band[0], freqs <= band[1])
         
         # Calculate the absolute power by integrating the PSD in the band
-        bp = simpson(psd[idx_band], freqs[idx_band])
+        bp = simpson(y=psd[idx_band], x=freqs[idx_band])
         
         if relative:
             # Calculate the total power
-            total_power = simpson(psd, freqs)
+            total_power = simpson(y=psd, x=freqs)
             bp = bp / total_power if total_power > 0 else 0
     except Exception as e:
         print(f"[ERROR] in compute_bandpower: {e}")
@@ -726,10 +727,10 @@ class OnlineVisualizer:
         fname = os.path.join(VIS_DIR, f'mindfulness_indices_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
         self.fig.savefig(fname)
         print(f"[REPORT] Mindfulness indices plot saved to {fname}")
-        plt.show()
+        # Close the figure to free memory
+        plt.close(self.fig)
 
     def log_metrics(self, y_true, y_pred):
-        from sklearn.metrics import precision_score, recall_score
         # Only compute if enough labels
         if len(y_true) > 10 and not all(np.isnan(y_true)):
             y_true_bin = [bin_mi(val) for val in y_true if not np.isnan(val)]
@@ -1066,6 +1067,7 @@ def main():
     mi_buffer = []
     mi_records = []
     next_calc_time = time.time()
+    session_start_time = time.time()  # Track session start time
     print(f"Entering real-time MI prediction loop at 1 Hz. Classification window: 3 seconds.\n")
     
     # Load user baseline statistics for normalization  
@@ -1287,7 +1289,12 @@ def main():
             'raw_mi': raw_mi_remapped, 
             'emi': emi_value,
             'timestamp': current_ts, 
-            'state': state
+            'state': state,
+            'theta_fz': theta_fz,
+            'alpha_po': alpha_po,
+            'faa': faa,
+            'beta_frontal': beta_frontal,
+            'eda_norm': eda_norm
         })
         # Handle Unity markers if available
         if label_inlet is not None:
@@ -1308,39 +1315,130 @@ def main():
             # No Unity markers - continue with MI pipeline only
             visualizer.update(mi_pred, raw_mi_value, emi_value, None)
     # --- After session: Save MI CSV and print report ---
+    print(f"\n{'='*60}")
+    print("SESSION COMPLETED - GENERATING REPORTS")
+    print(f"{'='*60}")
+    
+    session_duration = time.time() - session_start_time if 'session_start_time' in locals() else 0
+    print(f"Session Duration: {session_duration:.1f} seconds")
+    print(f"Total MI predictions: {len(mi_records)}")
+    
     session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
+    
     # Save all features and state if available
     session_df = pd.DataFrame(mi_records)
-    # If features are available, add them to the DataFrame
-    if 'features' in locals() and isinstance(features, list) and len(features) == 5:
-        # If features were collected in mi_records, add them
-        for i, feat_name in enumerate(FEATURE_ORDER):
-            session_df[feat_name] = [rec.get(feat_name, None) if isinstance(rec, dict) else None for rec in mi_records]
+    
+    # Add session metadata
+    if len(mi_records) > 0:
+        avg_mi = np.mean([r['mi'] for r in mi_records if 'mi' in r])
+        avg_raw_mi = np.mean([r['raw_mi'] for r in mi_records if 'raw_mi' in r])
+        avg_emi = np.mean([r['emi'] for r in mi_records if 'emi' in r])
+        
+        print(f"Average MI: {avg_mi:.3f}")
+        print(f"Average Raw MI: {avg_raw_mi:.3f}") 
+        print(f"Average EMI: {avg_emi:.3f}")
+        
+        # Count states
+        states = [r.get('state', 'unknown') for r in mi_records]
+        state_counts = {state: states.count(state) for state in set(states)}
+        print(f"State distribution: {state_counts}")
+    
+    # Save all features and state (features are now included in mi_records)
+    session_df = pd.DataFrame(mi_records)
+    
     session_df.to_csv(mi_csv_path, index=False)
-    print(f"\n[REPORT] MI session data saved to {mi_csv_path}")
-    # --- After session: Plot MI and features over time ---
+    print(f"\n[REPORT 1] MI session data saved to {mi_csv_path}")
+    # --- After session: Create comprehensive features visualization ---
+    print(f"\n[REPORT 2] Generating comprehensive features visualization...")
     try:
-        import matplotlib.pyplot as plt
         session_df = pd.read_csv(mi_csv_path)
-        fig, axes = plt.subplots(len(FEATURE_ORDER)+1, 1, figsize=(12, 2*(len(FEATURE_ORDER)+1)), sharex=True)
-        axes[0].plot(session_df['mi'], label='MI', color='blue')
-        axes[0].set_ylabel('MI')
-        axes[0].legend()
+        
+        # Create a comprehensive plot with MI and all 5 features
+        fig, axes = plt.subplots(6, 1, figsize=(15, 18), sharex=True)
+        
+        # Plot MI on the first subplot
+        axes[0].plot(session_df['mi'], label='MI', color='blue', linewidth=2)
+        axes[0].set_ylabel('MI Value', fontsize=12)
+        axes[0].set_title('Mindfulness Index and EEG/EDA Features Over Time', fontsize=14, fontweight='bold')
+        axes[0].legend(fontsize=10)
+        axes[0].grid(True, alpha=0.3)
+        axes[0].set_ylim(0, 1)
+        
+        # Define feature descriptions and colors for better visualization
+        feature_info = {
+            'theta_fz': {'title': 'Theta Power (Fz)', 'description': 'Attention/Focus', 'color': 'red'},
+            'alpha_po': {'title': 'Alpha Power (PO7/PO8)', 'description': 'Relaxation/Awareness', 'color': 'green'},
+            'faa': {'title': 'Frontal Alpha Asymmetry', 'description': 'Emotional Balance', 'color': 'purple'},
+            'beta_frontal': {'title': 'Beta Power (Frontal)', 'description': 'Mental Activity', 'color': 'orange'},
+            'eda_norm': {'title': 'EDA (Normalized)', 'description': 'Arousal/Stress', 'color': 'brown'}
+        }
+        
+        # Plot each feature with enhanced styling
         for i, feat in enumerate(FEATURE_ORDER):
             if feat in session_df.columns:
-                axes[i+1].plot(session_df[feat], label=feat)
-                axes[i+1].set_ylabel(feat)
-                axes[i+1].legend()
-        axes[-1].set_xlabel('Window')
+                feat_data = session_df[feat].dropna()
+                if len(feat_data) > 0:
+                    axes[i+1].plot(feat_data, 
+                                 label=f"{feature_info[feat]['title']}", 
+                                 color=feature_info[feat]['color'], 
+                                 linewidth=1.5)
+                    axes[i+1].set_ylabel(f"{feat}\n({feature_info[feat]['description']})", fontsize=10)
+                    axes[i+1].legend(fontsize=9)
+                    axes[i+1].grid(True, alpha=0.3)
+                    
+                    # Add statistical info in the title
+                    mean_val = feat_data.mean()
+                    std_val = feat_data.std()
+                    axes[i+1].set_title(f"Mean: {mean_val:.4f}, Std: {std_val:.4f}", fontsize=9)
+                else:
+                    axes[i+1].text(0.5, 0.5, f'No data for {feat}', 
+                                 transform=axes[i+1].transAxes, 
+                                 ha='center', va='center', fontsize=12)
+        
+        axes[-1].set_xlabel('Time (seconds)', fontsize=12)
         plt.tight_layout()
-        plot_path = os.path.join(LOG_DIR, f'{user_id}_mi_features_over_time_{session_time}.png')
-        plt.savefig(plot_path)
-        print(f"[REPORT] MI and features plot saved to {plot_path}")
+        
+        # Save the comprehensive plot
+        plot_path = os.path.join(VIS_DIR, f'{user_id}_comprehensive_features_{session_time}.png')
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        print(f"[REPORT 2] Comprehensive features plot saved to {plot_path}")
         plt.close(fig)
+        
+        # Create a second plot: Features correlation matrix
+        print(f"[REPORT 2b] Generating features correlation heatmap...")
+        features_df = session_df[FEATURE_ORDER + ['mi']].dropna()
+        if len(features_df) > 10:
+            fig2, ax2 = plt.subplots(figsize=(10, 8))
+            corr_matrix = features_df.corr()
+            im = ax2.imshow(corr_matrix, cmap='RdBu_r', aspect='auto', vmin=-1, vmax=1)
+            
+            # Add correlation values as text
+            for i in range(len(corr_matrix)):
+                for j in range(len(corr_matrix)):
+                    text = ax2.text(j, i, f'{corr_matrix.iloc[i, j]:.2f}',
+                                  ha="center", va="center", color="black", fontweight='bold')
+            
+            ax2.set_xticks(range(len(corr_matrix.columns)))
+            ax2.set_yticks(range(len(corr_matrix.columns)))
+            ax2.set_xticklabels([feature_info.get(col, {'title': col})['title'] for col in corr_matrix.columns], rotation=45)
+            ax2.set_yticklabels([feature_info.get(col, {'title': col})['title'] for col in corr_matrix.columns])
+            ax2.set_title('Feature Correlation Matrix', fontsize=14, fontweight='bold')
+            
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax2)
+            cbar.set_label('Correlation Coefficient', fontsize=12)
+            
+            plt.tight_layout()
+            corr_plot_path = os.path.join(VIS_DIR, f'{user_id}_features_correlation_{session_time}.png')
+            plt.savefig(corr_plot_path, dpi=200, bbox_inches='tight')
+            print(f"[REPORT 2b] Features correlation heatmap saved to {corr_plot_path}")
+            plt.close(fig2)
+        
     except Exception as e:
-        print(f"[WARN] Could not plot MI/features: {e}")
+        print(f"[WARN] Could not create features visualization: {e}")
     # --- Print and save summary statistics and feature-MI correlations ---
+    print(f"\n[REPORT 3] Computing summary statistics...")
     try:
         stats_report = []
         print("\n[SUMMARY STATISTICS]")
@@ -1352,9 +1450,10 @@ def main():
                 stats_report.append({'variable': col, 'mean': mean, 'std': std, 'min': vmin, 'max': vmax})
         stats_path = os.path.join(LOG_DIR, f'{user_id}_mi_feature_stats_{session_time}.csv')
         pd.DataFrame(stats_report).to_csv(stats_path, index=False)
-        print(f"[REPORT] Summary statistics saved to {stats_path}")
+        print(f"[REPORT 3] Summary statistics saved to {stats_path}")
+        
         # Feature-MI correlations
-        from scipy.stats import spearmanr
+        print(f"\n[REPORT 4] Computing feature-MI correlations...")
         corr_report = []
         print("\n[FEATURE-MI CORRELATIONS] (Spearman)")
         for feat in FEATURE_ORDER:
@@ -1364,9 +1463,25 @@ def main():
                 corr_report.append({'feature': feat, 'spearman_corr': corr, 'p_value': p})
         corr_path = os.path.join(LOG_DIR, f'{user_id}_mi_feature_corr_{session_time}.csv')
         pd.DataFrame(corr_report).to_csv(corr_path, index=False)
-        print(f"[REPORT] Feature-MI correlations saved to {corr_path}")
+        print(f"[REPORT 4] Feature-MI correlations saved to {corr_path}")
     except Exception as e:
         print(f"[WARN] Could not compute summary stats/correlations: {e}")
+    
+    # --- Generate final visualization ---
+    print(f"\n[REPORT 5] Generating final visualization...")
+    try:
+        visualizer.final_plot()
+        print(f"[REPORT 5] Final visualization completed")
+    except Exception as e:
+        print(f"[WARN] Could not generate final visualization: {e}")
+    
+    print(f"\n{'='*60}")
+    print("ALL REPORTS GENERATED SUCCESSFULLY")
+    print(f"{'='*60}")
+    print(f"Check the following directories for your reports:")
+    print(f"- CSV files: {LOG_DIR}")
+    print(f"- Plots: {LOG_DIR} and {VIS_DIR}")
+    print(f"{'='*60}\n")
 
 # --- Confirm required files and folders at startup ---
 REQUIRED_DIRS = [MODEL_DIR, LOG_DIR, VIS_DIR, PROCESSED_DATA_DIR, USER_CONFIG_DIR]
@@ -1412,11 +1527,11 @@ for i, (feat, title) in enumerate(zip(feature_names, titles), 1):
     plt.ylabel(feat)
 plt.tight_layout()
 plt.savefig('feature_time_series.png')
-plt.show()
+print("Feature time series plot saved to feature_time_series.png")
 # Optional: Pairplot/correlations
 sns.pairplot(df[feature_names])
 plt.savefig('feature_pairplot.png')
-plt.show()
+print("Feature pairplot saved to feature_pairplot.png")
 """
 
 # --- MAIN ENTRY POINT ---
