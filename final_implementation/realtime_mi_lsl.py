@@ -40,20 +40,23 @@ import sys
 import time
 import numpy as np
 import pandas as pd
+import glob
+import json
+import logging
+import threading
+import msvcrt
+import matplotlib.pyplot as plt
+import seaborn as sns
 from joblib import load, dump
+from datetime import datetime
+from scipy.signal import welch
+from scipy.integrate import simpson
 from pylsl import StreamInlet, StreamOutlet, StreamInfo, resolve_byprop
 from sklearn.linear_model import SGDRegressor, LinearRegression
 from sklearn.svm import SVR, SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-import logging
-import matplotlib.pyplot as plt
-from datetime import datetime
-import json
-import scipy.signal
-import seaborn as sns
 from sklearn.metrics import mean_absolute_error, r2_score
-import glob
 
 # --- CONFIG ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -62,20 +65,231 @@ LOG_DIR = os.path.join(BASE_DIR, 'logs')
 VIS_DIR = os.path.join(BASE_DIR, 'visualizations')
 PROCESSED_DATA_DIR = os.path.join(BASE_DIR, 'data', 'processed')
 USER_CONFIG_DIR = os.path.join(BASE_DIR, 'user_configs')
-for d in [MODEL_DIR, LOG_DIR, VIS_DIR, PROCESSED_DATA_DIR, USER_CONFIG_DIR]:
+EEG_DIR = os.path.join(BASE_DIR, 'data', '_eeg')
+EDA_DIR = os.path.join(BASE_DIR, 'data', '_eda')
+
+# Create required directories
+for d in [MODEL_DIR, LOG_DIR, VIS_DIR, PROCESSED_DATA_DIR, USER_CONFIG_DIR, EEG_DIR, EDA_DIR]:
     os.makedirs(d, exist_ok=True)
+
 MODEL_PATH = os.path.join(MODEL_DIR, 'svm_model.joblib')
 SCALER_PATH = os.path.join(MODEL_DIR, 'scaler.joblib')
-EEG_DIR = 'data/_eeg'
-EDA_DIR = 'data/_eda'
+# EEG and EDA directories are defined earlier
 FEATURE_ORDER = ['theta_fz', 'alpha_po', 'faa', 'beta_frontal', 'eda_norm']
 MI_THRESHOLDS = {'focused': 0.5, 'neutral': 0.37}
+
 # --- Online adaptation config ---
 ONLINE_UPDATE_WINDOW = 10  # Number of samples in moving window
 ONLINE_UPDATE_RATIO = 0.7  # Ratio of samples above/below threshold to trigger update
 ONLINE_MODEL_PATH_TEMPLATE = os.path.join(MODEL_DIR, '{}_online_model.joblib')
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Essential function for EEG processing - compute bandpower across frequency bands
+def compute_bandpower(data, sf, band, window_sec=None, relative=False):
+    """Compute the average power of the signal in a specific frequency band.
+    
+    Parameters
+    ----------
+    data : 1d-array
+        Input signal in the time-domain.
+    sf : float
+        Sampling frequency of the data.
+    band : tuple or list
+        Lower and upper frequencies of the band of interest.
+    window_sec : float
+        Length of each window in seconds (if None, use the entire signal).
+    relative : boolean
+        If True, return the relative power (= divided by the total power of the signal).
+        If False (default), return the absolute power.
+    
+    Returns
+    -------
+    bp : float
+        Absolute or relative band power.
+    """
+    # Define window length
+    if window_sec is not None:
+        nperseg = window_sec * sf
+    else:
+        nperseg = min(len(data), 256 * 8)
+    
+    # Check for valid data
+    if len(data) < 2:
+        return 0.0
+        
+    # Calculate spectrum using Welch's method
+    try:
+        freqs, psd = welch(data, sf, nperseg=nperseg)
+        
+        # Find the frequency indices corresponding to the band of interest
+        idx_band = np.logical_and(freqs >= band[0], freqs <= band[1])
+        
+        # Calculate the absolute power by integrating the PSD in the band
+        bp = simpson(psd[idx_band], freqs[idx_band])
+        
+        if relative:
+            # Calculate the total power
+            total_power = simpson(psd, freqs)
+            bp = bp / total_power if total_power > 0 else 0
+    except Exception as e:
+        print(f"[ERROR] in compute_bandpower: {e}")
+        bp = 0.0
+    
+    return bp
+
+def calculate_raw_mi(features):
+    """Calculate raw MI (pre-sigmoid) for more dynamic range"""
+    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
+    raw_mi = np.dot(features, weights) - 0.5
+    return raw_mi
+
+def remap_raw_mi(raw_mi):
+    """Remap raw MI to 0-1 range with scaled sigmoid for LSL output"""
+    # Apply scaled sigmoid remapping
+    mi_remapped = 1 / (1 + np.exp(-3 * raw_mi))
+    return mi_remapped
+
+def calculate_emi(features):
+    """Calculate Emotional Mindfulness Index - more sensitive to emotional features"""
+    # EMI gives more weight to frontal alpha asymmetry (FAA) and EDA
+    weights = np.array([0.15, 0.15, 0.4, -0.1, -0.2])
+    emi_raw = np.dot(features, weights) - 0.3
+    emi = 1 / (1 + np.exp(-2 * emi_raw))
+    return emi
+
+def setup_mindfulness_lsl_streams():
+    """Create LSL streams for MI and related values"""
+    # Create LSL stream for MI (standard 0-1 range)
+    mi_info = StreamInfo('MindfulnessIndex', 'MI', 1, 10, 'float32', 'mi_12345')
+    mi_outlet = StreamOutlet(mi_info)
+    
+    # Create LSL stream for raw MI (more dynamic range)
+    raw_mi_info = StreamInfo('RawMindfulnessIndex', 'RawMI', 1, 10, 'float32', 'raw_mi_12345')
+    raw_mi_outlet = StreamOutlet(raw_mi_info)
+    
+    # Create LSL stream for EMI (emotional mindfulness index)
+    emi_info = StreamInfo('EmotionalMindfulnessIndex', 'EMI', 1, 10, 'float32', 'emi_12345')
+    emi_outlet = StreamOutlet(emi_info)
+    
+    return {
+        'mi': mi_outlet,
+        'raw_mi': raw_mi_outlet,
+        'emi': emi_outlet
+    }
+
+def apply_artifact_regression(eeg, acc_gyr, regressors):
+    """Apply artifact regression to clean EEG using ACC/Gyro data"""
+    if regressors is None or len(regressors) < 8:
+        return eeg
+    
+    eeg_clean = eeg.copy()
+    for i in range(8):  # For each EEG channel
+        if regressors.get(f'eeg{i}') is not None:
+            weights = regressors[f'eeg{i}']
+            artifacts = np.dot(acc_gyr, weights)
+            eeg_clean[i] -= artifacts
+    
+    return eeg_clean
+
+def load_user_baseline(user_id):
+    """Load user's baseline statistics for normalization"""
+    baseline_csv = os.path.join(USER_CONFIG_DIR, f'{user_id}_baseline.csv')
+    if not os.path.exists(baseline_csv):
+        return None
+    
+    baseline_df = pd.read_csv(baseline_csv)
+    baseline_stats = {
+        'means': baseline_df[FEATURE_ORDER].mean().to_dict(),
+        'stds': baseline_df[FEATURE_ORDER].std().to_dict(),
+        'mins': baseline_df[FEATURE_ORDER].min().to_dict(),
+        'maxs': baseline_df[FEATURE_ORDER].max().to_dict(),
+        'percentiles': {
+            '25': baseline_df[FEATURE_ORDER].quantile(0.25).to_dict(),
+            '50': baseline_df[FEATURE_ORDER].quantile(0.50).to_dict(),
+            '75': baseline_df[FEATURE_ORDER].quantile(0.75).to_dict(),
+            '90': baseline_df[FEATURE_ORDER].quantile(0.90).to_dict()
+        }
+    }
+    
+    # Calculate baseline MI distribution
+    baseline_features = baseline_df[FEATURE_ORDER].values
+    baseline_mi = np.array([calculate_mi(f) for f in baseline_features])
+    baseline_stats['mi_baseline'] = {
+        'mean': np.mean(baseline_mi),
+        'std': np.std(baseline_mi),
+        'percentile_90': np.percentile(baseline_mi, 90)
+    }
+    
+    return baseline_stats
+
+def normalize_features_to_baseline(features, baseline_stats):
+    """Normalize current features relative to user's baseline"""
+    if baseline_stats is None:
+        return features
+    
+    normalized_features = []
+    for i, (feat_name, feat_val) in enumerate(zip(FEATURE_ORDER, features)):
+        baseline_mean = baseline_stats['means'][feat_name]
+        baseline_std = baseline_stats['stds'][feat_name]
+        
+        # Z-score normalization relative to baseline
+        if baseline_std > 0:
+            normalized_val = (feat_val - baseline_mean) / baseline_std
+        else:
+            normalized_val = 0.0
+        
+        normalized_features.append(normalized_val)
+    
+    return np.array(normalized_features)
+
+def calculate_mi_with_baseline(features, baseline_stats):
+    """Calculate MI using baseline-aware approach"""
+    if baseline_stats is None:
+        return calculate_mi(features)
+    
+    # Method 1: Use normalized features
+    normalized_features = normalize_features_to_baseline(features, baseline_stats)
+    
+    # Method 2: Adjust weights based on baseline variability
+    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
+    
+    # Scale weights by baseline standard deviation (more weight to more variable features)
+    baseline_stds = np.array([baseline_stats['stds'][feat] for feat in FEATURE_ORDER])
+    baseline_stds = np.clip(baseline_stds, 0.01, None)  # Avoid division by zero
+    adaptive_weights = weights * (1 + np.log(baseline_stds + 1))
+    
+    # Calculate raw MI
+    raw_mi = np.dot(normalized_features, adaptive_weights)
+    
+    # Adjust threshold based on baseline MI distribution
+    baseline_mi_mean = baseline_stats['mi_baseline']['mean']
+    threshold_adjustment = baseline_mi_mean - 0.5  # Adjust relative to expected baseline
+    
+    # Apply sigmoid with baseline-adjusted threshold
+    mi = 1 / (1 + np.exp(-(raw_mi - threshold_adjustment)))
+    
+    return mi
+
+def get_adaptive_thresholds(baseline_stats):
+    """Get adaptive MI thresholds based on user's baseline"""
+    if baseline_stats is None:
+        return MI_THRESHOLDS
+    
+    baseline_mi_mean = baseline_stats['mi_baseline']['mean']
+    baseline_mi_std = baseline_stats['mi_baseline']['std']
+    
+    # Adaptive thresholds: baseline + standard deviations
+    adaptive_thresholds = {
+        'focused': max(0.5, baseline_mi_mean + 1.5 * baseline_mi_std),
+        'neutral': max(0.37, baseline_mi_mean + 0.5 * baseline_mi_std),
+        'unfocused': baseline_mi_mean - 0.5 * baseline_mi_std
+    }
+    
+    # Ensure thresholds are in valid range [0, 1]
+    adaptive_thresholds = {k: np.clip(v, 0.05, 0.95) for k, v in adaptive_thresholds.items()}
+    
+    return adaptive_thresholds
 
 def bin_mi(mi):
     if mi >= MI_THRESHOLDS['focused']:
@@ -230,12 +444,20 @@ def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=Tru
 
 def calibrate_user(user_id, calibration_duration_sec=60):
     """
-    Calibration step: Collect baseline (ground truth) data for a new user at 250 Hz.
-    Expects RAW EEG (first 8 channels) and RAW ACC/Gyro (next 6 channels), and RAW EDA (2 channels).
-    Uses LSL timestamps for all samples. EDA is downsampled/interpolated to 250 Hz.
-    Also fits artifact regression models for each EEG channel using ACC/Gyro as regressors.
+    BASELINE CALIBRATION: Collect baseline data during relaxed/passive state.
+    
+    This function collects the user's baseline EEG/EDA patterns during a relaxed state
+    (eyes closed, sitting still). This baseline is crucial for:
+    - Personalizing MI thresholds relative to individual resting state
+    - Training user-specific models that account for individual differences
+    - Normalizing real-time features relative to personal baseline
+    
+    Expected data: RAW EEG (8 channels) + ACC/Gyro (6 channels) + RAW EDA (2 channels)
+    Sampling rate: 250 Hz, Feature extraction: 1 Hz (1-second windows)
     """
-    print(f"\n=== Calibration for user: {user_id} ===")
+    print(f"\n=== BASELINE CALIBRATION for user: {user_id} ===")
+    print("This will collect your BASELINE brain/body state during relaxation.")
+    print("Please remain as relaxed and still as possible during calibration.")
     print("Type 'exit' at any prompt to abort calibration.")
     # Show user info if config exists
     config_path = os.path.join(USER_CONFIG_DIR, f'{user_id}_config.json')
@@ -251,11 +473,17 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         print(f"[INFO] No previous calibration found for user '{user_id}'.")
     # Interactive countdown
     countdown_sec = 5
-    print(f"Calibration will start in {countdown_sec} seconds. Please get ready...")
+    print(f"\n[BASELINE CALIBRATION INSTRUCTIONS]")
+    print("• This will establish your personal BASELINE brain state")
+    print("• Please close your eyes and relax as much as possible")
+    print("• Avoid movement, thinking, or mental effort")
+    print("• Just sit comfortably and let your mind rest")
+    print("• This baseline will be used to personalize your MI thresholds")
+    print(f"\nCalibration will start in {countdown_sec} seconds. Please get ready...")
     for i in range(countdown_sec, 0, -1):
         print(f"Starting in {i}...", end='\r', flush=True)
         time.sleep(1)
-    print("\nPlease relax (e.g., eyes closed) and remain still. Collecting baseline samples...")
+    print("\n[COLLECTING BASELINE] Please remain relaxed with eyes closed...")
     print("Select the EEG LSL feature stream to use for calibration (must be RAW, unconverted EEG data):")
     eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream')
     if eeg_stream.channel_count() < 14:
@@ -290,8 +518,14 @@ def calibrate_user(user_id, calibration_duration_sec=60):
             continue
         eeg = np.array(eeg_sample[:8])
         acc_gyr = np.array(eeg_sample[8:14])
-        eda = np.array(eda_sample[:2])
+        eda_raw = np.array(eda_sample[:2])
+        eda = eda_raw  # Note: No scaling applied in calibration!
         eda_feat = eda[1]
+        
+        # Debug EDA values during calibration
+        if i % 250 == 0:  # Print every second
+            print(f"[DEBUG CALIB] EDA raw sample {i}: {eda_raw}")
+        
         eeg_samples.append(eeg)
         accgyr_samples.append(acc_gyr)
         eda_samples.append(eda)
@@ -300,12 +534,19 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         if len(eeg_samples) >= window_size and (i+1) % window_size == 0:
             eeg_win = np.array(eeg_samples[-window_size:])
             eda_win = np.array(eda_samples[-window_size:])
+            
+            # Debug EDA window during calibration
+            print(f"[DEBUG CALIB] EDA window {(i+1)//window_size}: ch0_mean={np.mean(eda_win[:,0]):.6f}, ch1_mean={np.mean(eda_win[:,1]):.6f}")
+            
             sf = 250
             theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))
             alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
             faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
             beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
             eda_norm = np.mean(eda_win[:,1])
+            
+            print(f"[DEBUG CALIB] EDA_NORM = {eda_norm:.6f}")
+            
             features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
             features_list.append(features)
             processed_outlet.push_sample(features, eeg_ts)
@@ -389,6 +630,14 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     dump(svr, user_model_path)
     dump(scaler, user_scaler_path)
     print(f"[AUTO] User SVR model and scaler saved: {user_model_path}, {user_scaler_path}")
+
+    # --- Train and save user-specific SVC classifier ---
+    print("[AUTO] Training user-specific SVC classifier...")
+    y_calib_binned = np.array([bin_mi(val) for val in y_calib])
+    svc = SVC().fit(X_calib_scaled, y_calib_binned)
+    user_svc_path = os.path.join(MODEL_DIR, f'{user_id}_svc_model.joblib')
+    dump(svc, user_svc_path)
+    print(f"[AUTO] User SVC classifier saved: {user_svc_path}")
 
     # --- Evaluate new model ---
     y_new_pred = svr.predict(X_calib_scaled)
@@ -509,8 +758,24 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
     online_model.partial_fit(X_scaled, svr.predict(X_scaled))    # Step 3: LSL setup
     feature_stream = select_lsl_stream('Features')
     feature_inlet = StreamInlet(feature_stream)
-    label_stream = select_lsl_stream('UnityMarkers', confirm=False)
-    label_inlet = StreamInlet(label_stream)
+    
+    # Unity markers are optional in run_experiment too
+    use_unity = input("Use Unity markers in experiment? (y/n, default: n): ").strip().lower()
+    if use_unity == 'y':
+        try:
+            label_stream = select_lsl_stream('UnityMarkers', allow_skip=True, confirm=True)
+            if label_stream is not None:
+                label_inlet = StreamInlet(label_stream)
+                print("Unity markers connected for experiment.")
+            else:
+                label_inlet = None
+                print("[INFO] Unity markers skipped for experiment.")
+        except Exception as e:
+            print(f"[WARN] Unity markers connection failed: {e}")
+            label_inlet = None
+    else:
+        label_inlet = None
+        print("[INFO] Unity markers disabled for experiment.")
     
     # Create all LSL output streams
     outlets = setup_mindfulness_lsl_streams()
@@ -544,17 +809,27 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
             state = "Unfocused"
         print(f"MI: {mi_pred:.3f} | State: {state}")
         mi_outlet.push_sample([mi_pred])
-        label, _ = label_inlet.pull_sample(timeout=0.01)
-        if label:
-            online_model.partial_fit(x_scaled, [float(label[0])])
-            visualizer.update(mi_pred, float(label[0]))
-            visualizer.log_metrics(np.array(visualizer.label_history), np.array(visualizer.mi_history))
+        
+        # Handle Unity markers if available
+        if label_inlet is not None:
+            try:
+                label, _ = label_inlet.pull_sample(timeout=0.01)
+                if label:
+                    online_model.partial_fit(x_scaled, [float(label[0])])
+                    visualizer.update(mi_pred, float(label[0]))
+                    visualizer.log_metrics(np.array(visualizer.label_history), np.array(visualizer.mi_history))
+                else:
+                    visualizer.update(mi_pred)
+            except Exception as e:
+                # Continue without Unity markers if they fail
+                visualizer.update(mi_pred)
         else:
             visualizer.update(mi_pred)
     print("Experiment complete.")
 
-# --- MAIN ENTRY ---
+# --- MAIN ENTRY POINT ---
 def main():
+    check_required_resources()
     print("\n==============================")
     print("REAL-TIME MI LSL PIPELINE STARTING")
     print("==============================\n")
@@ -624,22 +899,27 @@ def main():
     else:
         eda_inlet = None
         print("EDA stream skipped. Will use generic model/scaler.")
-    # --- New: Option to continue in offline/report mode if no LSL streams are found ---
+    # --- Unity markers are completely optional ---
+    use_unity_markers = input("Connect to Unity markers stream? (y/n, default: n): ").strip().lower()
+    if use_unity_markers == 'y':
+        try:
+            print("Resolving Unity label stream (type='UnityMarkers')...")
+            label_stream = select_lsl_stream('UnityMarkers', allow_skip=True, confirm=True)
+            if label_stream is not None:
+                label_inlet = StreamInlet(label_stream)
+                print("Unity label stream connected.")
+            else:
+                label_inlet = None
+                print("[INFO] Unity markers skipped by user choice.")
+        except Exception as e:
+            print(f"[WARN] Unity label stream connection failed: {e}")
+            print("[INFO] Continuing without Unity markers.")
+            label_inlet = None
+    else:
+        print("[INFO] Unity markers disabled. MI pipeline will run independently.")
+        label_inlet = None
+    # Ask user for MI calculation rate and transmission interval
     try:
-        print("Resolving Unity label stream (type='UnityMarkers')...")
-        label_stream = select_lsl_stream('UnityMarkers', confirm=False)
-        label_inlet = StreamInlet(label_stream)
-        print("Unity label stream connected.")
-    except RuntimeError as e:
-        print(f"[ERROR] {e}")
-        choice = input("No LSL label stream found. Type 'offline' to continue in offline/report mode, or press Enter to exit: ").strip().lower()
-        if choice == 'offline':
-            generate_offline_report()
-            return
-        else:
-            print("Exiting.")
-            return
-    # Ask user for MI calculation rate and transmission interval    try:
         mi_calc_rate_input = input("Enter MI calculation rate in Hz (default 10): ").strip()
         if mi_calc_rate_input == '':
             MI_CALC_RATE = 10
@@ -647,7 +927,7 @@ def main():
             MI_CALC_RATE = float(mi_calc_rate_input)
     except Exception:
         MI_CALC_RATE = 10
-        
+    
     try:
         mi_update_interval_input = input("Enter MI transmission interval in seconds (default 3): ").strip()
         if mi_update_interval_input == '':
@@ -656,7 +936,7 @@ def main():
             MI_UPDATE_INTERVAL = float(mi_update_interval_input)
     except Exception:
         MI_UPDATE_INTERVAL = 3.0
-          # Create all LSL output streams
+    # Create all LSL output streams
     outlets = setup_mindfulness_lsl_streams()
     mi_outlet = outlets['mi']
     raw_mi_outlet = outlets['raw_mi']
@@ -670,16 +950,18 @@ def main():
     print("Entering real-time MI prediction loop at 1 Hz. Classification every 3 seconds.")
     # --- Automatic input data analysis and adaptation ---
     eeg_scale_factor = 0.001  # Scale down large EEG values by 1000x
-    eda_scale_factor = 0.0001  # Scale down large EDA values by 10000x
+    eda_scale_factor = 1.0    # Start with 1.0 - no scaling initially
+    
+    print(f"[INFO] Initial scaling factors: EEG={eeg_scale_factor}, EDA={eda_scale_factor}")
+    
     if eeg_inlet is not None or eda_inlet is not None:
         print("\n[INFO] Running automatic input data analysis for EEG/EDA streams...")
         # Analyze and adapt scaling if needed
-        # Import numpy here to avoid scope issues
         import numpy as np
         analysis_eeg_vals = []
         analysis_eda_vals = []
         n_samples = 500
-        for _ in range(n_samples):
+        for sample_idx in range(n_samples):
             if eeg_inlet is not None:
                 eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.5)
                 if eeg_sample is not None:
@@ -687,7 +969,12 @@ def main():
             if eda_inlet is not None:
                 eda_sample, _ = eda_inlet.pull_sample(timeout=0.5)
                 if eda_sample is not None:
-                    analysis_eda_vals.append(np.array(eda_sample[:2]))
+                    eda_raw = np.array(eda_sample[:2])
+                    analysis_eda_vals.append(eda_raw)
+                    # Debug first few samples
+                    if sample_idx < 10:
+                        print(f"[DEBUG] Analysis EDA sample {sample_idx}: {eda_raw}")
+                        
         if analysis_eeg_vals:
             eeg_arr = np.vstack(analysis_eeg_vals)
             print("\n[EEG RAW DATA ANALYSIS]")
@@ -703,13 +990,45 @@ def main():
             eda_arr = np.vstack(analysis_eda_vals)
             print("\n[EDA RAW DATA ANALYSIS]")
             print(f"  Shape: {eda_arr.shape}")
-            print(f"  Min: {np.min(eda_arr):.5f}, Max: {np.max(eda_arr):.5f}, Mean: {np.mean(eda_arr):.5f}, Std: {np.std(eda_arr):.5f}")
+            print(f"  Channel 0 - Min: {np.min(eda_arr[:,0]):.6f}, Max: {np.max(eda_arr[:,0]):.6f}, Mean: {np.mean(eda_arr[:,0]):.6f}, Std: {np.std(eda_arr[:,0]):.6f}")
+            print(f"  Channel 1 - Min: {np.min(eda_arr[:,1]):.6f}, Max: {np.max(eda_arr[:,1]):.6f}, Mean: {np.mean(eda_arr[:,1]):.6f}, Std: {np.std(eda_arr[:,1]):.6f}")
+            
+            # Determine appropriate scaling
+            max_ch0 = np.nanmax(np.abs(eda_arr[:,0]))
+            max_ch1 = np.nanmax(np.abs(eda_arr[:,1]))
+            
+            print(f"  Max absolute values: Ch0={max_ch0:.6f}, Ch1={max_ch1:.6f}")
+            
+            # Adjust scaling based on EDA range
+            if max_ch1 > 100000:
+                eda_scale_factor = 0.00001  # Very large values
+                print(f"  [INFO] EDA values are very large. Using scale factor: {eda_scale_factor}")
+            elif max_ch1 > 10000:
+                eda_scale_factor = 0.0001   # Large values
+                print(f"  [INFO] EDA values are large. Using scale factor: {eda_scale_factor}")
+            elif max_ch1 > 1000:
+                eda_scale_factor = 0.001    # Medium values
+                print(f"  [INFO] EDA values are medium. Using scale factor: {eda_scale_factor}")
+            elif max_ch1 < 0.01:
+                eda_scale_factor = 100.0    # Very small values - scale up
+                print(f"  [INFO] EDA values are very small. Using scale factor: {eda_scale_factor}")
+            else:
+                eda_scale_factor = 1.0      # Good range - no scaling
+                print(f"  [INFO] EDA values are in good range. Using scale factor: {eda_scale_factor}")
+                
             if np.issubdtype(eda_arr.dtype, np.integer):
                 print("  [WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
-            if np.nanmax(np.abs(eda_arr)) < 0.01:
-                print("  [WARN] EDA data values are very small (<0.01). RAW EDA is expected. Check your LSL stream.")
-            if np.nanmax(np.abs(eda_arr)) > 10:
-                print("  [WARN] EDA data values are very large (>10). Check for scaling or units.")
+            
+            # Check for constant values
+            if np.std(eda_arr[:,0]) < 1e-10:
+                print("  [WARN] EDA channel 0 appears constant!")
+            if np.std(eda_arr[:,1]) < 1e-10:
+                print("  [WARN] EDA channel 1 appears constant!")
+        
+        print(f"\n[INFO] Final scaling factors: EEG={eeg_scale_factor}, EDA={eda_scale_factor}")
+    
+    # IMPORTANT: Apply the same scaling to calibration if needed
+    # (This inconsistency could be causing the problem)
 
     # In the real-time MI prediction loop, apply scaling before feature extraction
     # Replace in the loop:
@@ -748,6 +1067,45 @@ def main():
     mi_records = []
     next_calc_time = time.time()
     print(f"Entering real-time MI prediction loop at 1 Hz. Classification window: 3 seconds.\n")
+    
+    # Load user baseline statistics for normalization  
+    baseline_stats = load_user_baseline(user_id)
+    has_user_calibration = baseline_stats is not None
+    
+    if has_user_calibration:
+        print(f"[INFO] Loaded user baseline statistics for {user_id}")
+        print(f"[INFO] Baseline MI: mean={baseline_stats['mi_baseline']['mean']:.3f}, std={baseline_stats['mi_baseline']['std']:.3f}")
+        print("[INFO] Using calibrated user: SVR regression for continuous MI values (0-1 range)")
+        print("[INFO] No classification thresholds needed - outputting raw MI numbers")
+        # For calibrated users, we don't use SVC classification
+        global_svc = None
+    else:
+        print(f"[WARN] No baseline data found for {user_id}. Using default MI calculation.")
+        print("[INFO] Using non-calibrated user: Will attempt to load SVC for classification if available")
+        
+        # Try to load global SVC for non-calibrated users (check feature compatibility)
+        if os.path.exists(MODEL_PATH):
+            try:
+                # Check if global SVC expects 5 features
+                test_svc = load(MODEL_PATH)
+                if hasattr(test_svc, 'n_features_in_'):
+                    if test_svc.n_features_in_ == 5:
+                        global_svc = test_svc
+                        print(f"[INFO] Loaded global SVC classifier (5 features) from {MODEL_PATH}")
+                    else:
+                        print(f"[WARN] Global SVC expects {test_svc.n_features_in_} features, but pipeline uses 5. Skipping SVC classification.")
+                        global_svc = None
+                else:
+                    # Old sklearn version - try to load anyway
+                    global_svc = test_svc
+                    print(f"[INFO] Loaded global SVC classifier from {MODEL_PATH} (feature count unknown)")
+            except Exception as e:
+                print(f"[WARN] Failed to load global SVC: {e}. Using SVR regression only.")
+                global_svc = None
+        else:
+            global_svc = None
+            print("[INFO] No global SVC model found. Using SVR regression only.")
+        
     while not stop_flag['stop']:
         now = time.time()
         if now < next_calc_time:
@@ -756,29 +1114,51 @@ def main():
         next_calc_time += 1.0  # 1 Hz
         # Collect 250 samples for 1-second window
         eeg_win_buf, eda_win_buf, ts_win_buf = [], [], []
-        for _ in range(WINDOW_SIZE):
+        for i in range(WINDOW_SIZE):
             if eeg_inlet is not None:
                 eeg_sample, eeg_ts = eeg_inlet.pull_sample(timeout=1.0)
-                eeg = np.array(eeg_sample[:8]) * eeg_scale_factor
-                acc_gyr = np.array(eeg_sample[8:14])
-                if artifact_regressors is not None:
-                    eeg_clean = apply_artifact_regression(eeg, acc_gyr, artifact_regressors)
+                if eeg_sample is not None:
+                    eeg = np.array(eeg_sample[:8]) * eeg_scale_factor
+                    acc_gyr = np.array(eeg_sample[8:14])
+                    if artifact_regressors is not None:
+                        eeg_clean = apply_artifact_regression(eeg, acc_gyr, artifact_regressors)
+                    else:
+                        eeg_clean = eeg
                 else:
-                    eeg_clean = eeg
+                    eeg_clean = np.zeros(8)
+                    eeg_ts = time.time()
+                    print(f"[DEBUG] EEG sample {i} is None!")
             else:
                 eeg_clean = np.zeros(8)
                 eeg_ts = time.time()
+            
             if eda_inlet is not None:
                 eda_sample, eda_ts = eda_inlet.pull_sample(timeout=1.0)
-                eda = np.array(eda_sample[:2]) * eda_scale_factor
+                if eda_sample is not None:
+                    eda_raw = np.array(eda_sample[:2])
+                    eda = eda_raw * eda_scale_factor
+                    # Debug EDA values
+                    if i % 50 == 0:  # Print every 50th sample to avoid spam
+                        print(f"[DEBUG] EDA sample {i}: raw={eda_raw}, scaled={eda}, scale_factor={eda_scale_factor}")
+                else:
+                    eda = np.zeros(2)
+                    eda_ts = eeg_ts
+                    print(f"[DEBUG] EDA sample {i} is None!")
             else:
                 eda = np.zeros(2)
                 eda_ts = eeg_ts
+            
             eeg_win_buf.append(eeg_clean)
             eda_win_buf.append(eda)
             ts_win_buf.append(eeg_ts)
         eeg_win = np.array(eeg_win_buf)
         eda_win = np.array(eda_win_buf)
+        
+        # --- Debug EDA window statistics ---
+        print(f"[DEBUG] EDA window shape: {eda_win.shape}")
+        print(f"[DEBUG] EDA channel 0 stats: min={np.min(eda_win[:,0]):.6f}, max={np.max(eda_win[:,0]):.6f}, mean={np.mean(eda_win[:,0]):.6f}")
+        print(f"[DEBUG] EDA channel 1 stats: min={np.min(eda_win[:,1]):.6f}, max={np.max(eda_win[:,1]):.6f}, mean={np.mean(eda_win[:,1]):.6f}")
+        
         # --- Feature extraction (windowed, real) ---
         sf = 250
         theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))
@@ -786,8 +1166,15 @@ def main():
         faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
         beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
         eda_norm = np.mean(eda_win[:,1])
+        
+        # --- Debug EDA normalization ---
+        print(f"[DEBUG] EDA_NORM calculation: mean of channel 1 = {eda_norm:.6f}")
+        print(f"[DEBUG] EDA channel 1 raw values (first 10): {eda_win[:10,1]}")
+        
         features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
         sample = np.array(features).reshape(1, -1)
+        # --- Print features and MI values in real-time ---
+        print(f"[REAL-TIME] Features: {dict(zip(FEATURE_ORDER, features))}")
         # Warn if features are all zeros, all NaN, or constant
         if np.all(np.isnan(sample)):
             print("[WARN] All features are NaN. Skipping MI prediction for this window.")
@@ -816,21 +1203,63 @@ def main():
                     print("\n[DEBUG] Near-zero MI value detected!")
                     print(f"[DEBUG] Raw features: {sample[0]}")
                     print(f"[DEBUG] Scaled features: {x_scaled[0]}")
-                    # Recalculate with the calculate_mi formula to compare with model
                     recalc_mi = calculate_mi(sample[0])
                     print(f"[DEBUG] Direct MI calculation: {recalc_mi}, Model prediction: {mi_pred}")
                     print(f"[DEBUG] Difference: {abs(recalc_mi - mi_pred):.6f}")
                     if abs(recalc_mi - mi_pred) > 0.1:
                         print("[DEBUG] Large difference between direct calculation and model! Check model training.")
                     print("")
-        # --- Real-time classification printout ---
-        if mi_pred >= 0.5:
-            state = "Focused"
-        elif mi_pred >= 0.37:
-            state = "Neutral"
+        
+        # --- Real-time MI output ---
+        if skipped_reason:
+            # Set default state for skipped predictions
+            state = "skipped"
+            print(f"MI: {mi_pred:.4f} (prediction skipped: {skipped_reason})")
+        elif has_user_calibration:
+            # Calibrated user: Just output the continuous MI value
+            print(f"MI: {mi_pred:.4f}")
+            state = "continuous"  # No discrete classification for calibrated users
         else:
-            state = "Unfocused"
-        print(f"MI: {mi_pred:.3f} | State: {state}")
+            # Non-calibrated user: Try SVC classification if available
+            if global_svc is not None:
+                try:
+                    svc_state_idx = global_svc.predict(x_scaled)[0]
+                    svc_state = {2: "Focused", 1: "Neutral", 0: "Unfocused"}.get(svc_state_idx, str(svc_state_idx))
+                    print(f"MI: {mi_pred:.3f} | SVC State: {svc_state}")
+                    state = svc_state
+                except Exception as e:
+                    print(f"[WARN] SVC prediction failed: {e}. Using threshold classification.")
+                    # Fallback to threshold-based classification
+                    if mi_pred >= 0.5:
+                        state = "Focused"
+                    elif mi_pred >= 0.37:
+                        state = "Neutral"
+                    else:
+                        state = "Unfocused"
+                    print(f"MI: {mi_pred:.3f} | State: {state} (threshold-based)")
+            else:
+                # No SVC available - use threshold classification
+                if mi_pred >= 0.5:
+                    state = "Focused"
+                elif mi_pred >= 0.37:
+                    state = "Neutral"
+                else:
+                    state = "Unfocused"
+                print(f"MI: {mi_pred:.3f} | State: {state} (threshold-based)")
+        
+        # Show how current features compare to baseline
+        if baseline_stats is not None:
+            print(f"[BASELINE COMPARISON]")
+            for feat_name, feat_val in zip(FEATURE_ORDER, features):
+                baseline_mean = baseline_stats['means'][feat_name]
+                baseline_std = baseline_stats['stds'][feat_name]
+                if baseline_std > 0:
+                    z_score = (feat_val - baseline_mean) / baseline_std
+                    comparison = "HIGH" if z_score > 1.5 else "LOW" if z_score < -1.5 else "NORMAL"
+                    print(f"  {feat_name}: {comparison} (z={z_score:.2f})")
+            print(f"  Current MI vs Baseline: {mi_pred:.3f} vs {baseline_stats['mi_baseline']['mean']:.3f}")
+            print("")
+        
         mi_buffer.append(mi_pred)
         if skipped_reason:
             if 'mi_skipped_count' not in locals():
@@ -840,36 +1269,44 @@ def main():
         # Calculate additional indices for more dynamic feedback
         raw_mi_value = calculate_raw_mi(sample[0])  # More dynamic range
         emi_value = calculate_emi(sample[0])       # Emotional mindfulness index
-        
         # Remap raw MI to 0-1 range for output
         raw_mi_remapped = remap_raw_mi(raw_mi_value)
+        # --- Print all MI values ---
+        print(f"[REAL-TIME] MI: {mi_pred:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f}")
         
-        # Only push to LSL once per second (1 Hz)
-        ts = ts_win_buf[-1]
-        print(f"Pushed MI: {mi_pred:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f} | State: {state}")
-        
+        # Use current time for samples
+        current_ts = time.time()
         # Push all index types to their respective LSL streams
-        mi_outlet.push_sample([mi_pred], ts)
-        raw_mi_outlet.push_sample([raw_mi_remapped], ts)
-        emi_outlet.push_sample([emi_value], ts)
+        mi_outlet.push_sample([mi_pred], current_ts)
+        raw_mi_outlet.push_sample([raw_mi_remapped], current_ts)
+        emi_outlet.push_sample([emi_value], current_ts)
         
         # Record for visualization/analysis
         mi_records.append({
             'mi': mi_pred, 
             'raw_mi': raw_mi_remapped, 
             'emi': emi_value,
-            'timestamp': ts, 
+            'timestamp': current_ts, 
             'state': state
         })
-        label, label_ts = label_inlet.pull_sample(timeout=0.01)
-        if label:
+        # Handle Unity markers if available
+        if label_inlet is not None:
             try:
-                label_val = float(label[0])
-                visualizer.update(mi_pred, raw_mi_value, emi_value, label_val)
-            except (ValueError, TypeError):
+                label, label_ts = label_inlet.pull_sample(timeout=0.01)
+                if label:
+                    try:
+                        label_val = float(label[0])
+                        visualizer.update(mi_pred, raw_mi_value, emi_value, label_val)
+                    except (ValueError, TypeError):
+                        visualizer.update(mi_pred, raw_mi_value, emi_value, None)
+                else:
+                    visualizer.update(mi_pred, raw_mi_value, emi_value, None)
+            except Exception as e:
+                # If Unity stream fails, continue without it
                 visualizer.update(mi_pred, raw_mi_value, emi_value, None)
         else:
-            visualizer.update(mi_pred, raw_mi_value, emi_value)
+            # No Unity markers - continue with MI pipeline only
+            visualizer.update(mi_pred, raw_mi_value, emi_value, None)
     # --- After session: Save MI CSV and print report ---
     session_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     mi_csv_path = os.path.join(LOG_DIR, f'{user_id}_mi_session_{session_time}.csv')
@@ -882,430 +1319,71 @@ def main():
             session_df[feat_name] = [rec.get(feat_name, None) if isinstance(rec, dict) else None for rec in mi_records]
     session_df.to_csv(mi_csv_path, index=False)
     print(f"\n[REPORT] MI session data saved to {mi_csv_path}")
-    # Print summary of MI prediction skips if any
-    if 'mi_skipped_count' in locals() and mi_skipped_count:
-        print("\n[SUMMARY] MI predictions skipped due to feature issues:")
-        for reason, count in mi_skipped_count.items():
-            print(f"  {reason}: {count} windows skipped")
-    mi_vals = [r['mi'] for r in mi_records]
-    if mi_vals:
-        mi_arr = np.array(mi_vals)
-        summary = {
-            'user_id': user_id,
-            'session_time': session_time,
-            'n_samples': len(mi_arr),
-            'mi_mean': np.mean(mi_arr),
-            'mi_std': np.std(mi_arr),
-            'mi_min': np.min(mi_arr),
-            'mi_max': np.max(mi_arr),
-            'focused_pct': 100 * sum(v >= 0.5 for v in mi_arr) / len(mi_arr),
-            'neutral_pct': 100 * sum((v >= 0.37) and (v < 0.5) for v in mi_arr),
-            'unfocused_pct': 100 * sum(v < 0.37 for v in mi_arr) / len(mi_arr)
-        }
-        report_path = os.path.join(LOG_DIR, f'{user_id}_mi_report_{session_time}.csv')
-        pd.DataFrame([summary]).to_csv(report_path, index=False)
-        print(f"\n[REPORT] Session summary saved to {report_path}")
-
-        # --- Wilcoxon Signed-Rank Test for phases (if available) ---
-        try:
-            import scipy.stats as stats
-            if 'phase' in session_df.columns:
-                phases = session_df['phase'].dropna().unique()
-                if len(phases) == 2:
-                    vals1 = session_df[session_df['phase'] == phases[0]]['mi'].dropna()
-                    vals2 = session_df[session_df['phase'] == phases[1]]['mi'].dropna()
-                    if len(vals1) > 0 and len(vals2) > 0:
-                        stat, p = stats.wilcoxon(vals1, vals2)
-                        wilcoxon_result = {
-                            'phase1': phases[0],
-                            'phase2': phases[1],
-                            'wilcoxon_stat': stat,
-                            'wilcoxon_p': p
-                        }
-                        wilcoxon_path = os.path.join(LOG_DIR, f'{user_id}_wilcoxon_{session_time}.csv')
-                        pd.DataFrame([wilcoxon_result]).to_csv(wilcoxon_path, index=False)
-                        print(f"[REPORT] Wilcoxon Signed-Rank Test saved to {wilcoxon_path}")
-        except Exception as e:
-            print(f"[WARN] Wilcoxon test not computed: {e}")
-
-        # --- Spearman's rank correlation (features vs MI) ---
-        try:
-            spearman_results = []
-            for feat in FEATURE_ORDER:
-                if feat in session_df.columns:
-                    corr, p = stats.spearmanr(session_df[feat], session_df['mi'], nan_policy='omit')
-                    spearman_results.append({'feature': feat, 'spearman_corr': corr, 'spearman_p': p})
-            if spearman_results:
-                spearman_path = os.path.join(LOG_DIR, f'{user_id}_spearman_{session_time}.csv')
-                pd.DataFrame(spearman_results).to_csv(spearman_path, index=False)
-                print(f"[REPORT] Spearman correlations saved to {spearman_path}")
-        except Exception as e:
-            print(f"[WARN] Spearman correlation not computed: {e}")
-
-        # --- Real-time classification comparative (only at end) ---
-        # If Unity labels were received, compare MI predictions to labels
-        label_vals = [l for l in visualizer.label_history if not np.isnan(l)]
-        if label_vals:
-            from sklearn.metrics import precision_score, recall_score, f1_score
-            y_true_bin = [bin_mi(val) for val in label_vals]
-            y_pred_bin = [bin_mi(val) for val in visualizer.mi_history[:len(y_true_bin)]]
-            precision = precision_score(y_true_bin, y_pred_bin, average='macro', zero_division=0)
-            recall = recall_score(y_true_bin, y_pred_bin, average='macro', zero_division=0)
-            f1 = f1_score(y_true_bin, y_pred_bin, average='macro', zero_division=0)
-            print(f"[REAL-TIME CLASSIFICATION REPORT] Precision: {precision:.3f}, Recall: {recall:.3f}, F1 Score: {f1:.3f}")
-
-            # --- Save real-time classification report ---
-            rt_report_path = os.path.join(LOG_DIR, f'{user_id}_mi_realtime_classification_report_{session_time}.csv')
-            pd.DataFrame([{
-                'user_id': user_id,
-                'session_time': session_time,
-                'precision': precision,
-                'recall': recall,
-                'f1_score': f1
-            }]).to_csv(rt_report_path, index=False)
-            print(f"[REPORT] Real-time classification report saved to {rt_report_path}")
-
-        # --- Show and save final MI plot and features plot ---
-        visualizer.final_plot()
-        # Additional: Plot MI, features, and state/label over time for the session
-        try:
-            import matplotlib.pyplot as plt
-            import numpy as np
-            # Reload session_df to ensure all columns
-            session_df = pd.read_csv(mi_csv_path)
-            fig, axes = plt.subplots(7, 1, figsize=(12, 16), sharex=True)
-            axes[0].plot(session_df['mi'], label='MI', color='blue')
-            axes[0].set_ylabel('MI')
-            axes[0].legend()
-            for i, feat in enumerate(FEATURE_ORDER):
-                if feat in session_df.columns:
-                    axes[i+1].plot(session_df[feat], label=feat)
-                    axes[i+1].set_ylabel(feat)
-                    axes[i+1].legend()
-            if 'state' in session_df.columns:
-                axes[-1].plot(session_df['state'], label='State', color='purple')
-                axes[-1].set_ylabel('State')
-                axes[-1].legend()
-            elif 'label' in session_df.columns:
-                axes[-1].plot(session_df['label'], label='Label', color='purple')
-                axes[-1].set_ylabel('Label')
-                axes[-1].legend()
-            axes[-1].set_xlabel('Window')
-            plt.tight_layout()
-            plot_path = os.path.join(LOG_DIR, f'{user_id}_mi_features_state_{session_time}.png')
-            plt.savefig(plot_path)
-            print(f"[REPORT] MI, features, and state/label plot saved to {plot_path}")
-            plt.close(fig)
-        except Exception as e:
-            print(f"[WARN] Could not generate MI/features/state plot: {e}")
-def apply_artifact_regression(eeg, acc_gyr, artifact_regressors):
-    """
-    Remove predicted artifact from each EEG channel using linear regression coefficients.
-    Args:
-        eeg: np.array, shape (8,) - raw EEG channels
-        acc_gyr: np.array, shape (6,) - raw ACC/Gyro channels
-        artifact_regressors: list of dicts or np.array, len 8, each with 'coef' and 'intercept'
-    Returns:
-        eeg_clean: np.array, shape (8,)
-    """
-    eeg_clean = np.zeros_like(eeg)
-    for ch in range(8):
-        if artifact_regressors is not None and len(artifact_regressors) > ch:
-            reg = artifact_regressors[ch]
-            # Support both dict and sklearn LinearRegression
-            if isinstance(reg, dict):
-                coef = np.array(reg.get('coef', np.zeros(6)))
-                intercept = reg.get('intercept', 0.0)
-            else:
-                coef = np.array(getattr(reg, 'coef_', np.zeros(6)))
-                intercept = getattr(reg, 'intercept_', 0.0)
-            predicted_artifact = np.dot(coef, acc_gyr) + intercept
-            eeg_clean[ch] = eeg[ch] - predicted_artifact
-        else:
-            eeg_clean[ch] = eeg[ch]
-    return eeg_clean
-
-def compute_bandpower(data, sf, band, window_sec=None, relative=False):
-    """
-    Compute the average power of the signal x in a specific frequency band.
-    data: 1D numpy array (samples,)
-    sf: float, sampling frequency
-    band: tuple, (low, high)
-    window_sec: float or None
-    relative: bool, return relative power
-    """
-    # Handle extremely large values - auto-scale if necessary
-    max_value = np.max(np.abs(data))
-    if max_value > 100000:  # Extremely high values
-        scale_factor = 10000.0 / max_value
-        scaled_data = data * scale_factor
-        print(f"[WARN] Auto-scaling EEG data (max={max_value:.1f}) by factor {scale_factor:.6f}")
-    elif max_value < 0.01 and max_value > 0:  # Extremely low values
-        scale_factor = 1.0 / max_value 
-        scaled_data = data * scale_factor
-        print(f"[WARN] Auto-scaling EEG data (max={max_value:.6f}) by factor {scale_factor:.2f}")
-    else:
-        scaled_data = data
-    
-    band = np.asarray(band)
-    low, high = band
-    if window_sec is not None:
-        nperseg = int(window_sec * sf)
-    else:
-        nperseg = min(256, len(scaled_data))
-    
+    # --- After session: Plot MI and features over time ---
     try:
-        freqs, psd = scipy.signal.welch(scaled_data, sf, nperseg=nperseg)
-        freq_res = freqs[1] - freqs[0]
-        idx_band = np.logical_and(freqs >= low, freqs <= high)
-        
-        # Using scipy.integrate.trapezoid instead of deprecated np.trapz
-        try:
-            from scipy.integrate import trapezoid
-            bp = trapezoid(psd[idx_band], dx=freq_res)
-            if relative:
-                bp /= trapezoid(psd, dx=freq_res)
-        except ImportError:
-            # Fall back to np.trapz if needed
-            bp = np.trapz(psd[idx_band], dx=freq_res)
-            if relative:
-                bp /= np.trapz(psd, dx=freq_res)
-    
-        # Use log scale for large power values to reduce range
-        if bp > 10000:
-            bp = np.log10(bp)
-            
-        return bp
-    
+        import matplotlib.pyplot as plt
+        session_df = pd.read_csv(mi_csv_path)
+        fig, axes = plt.subplots(len(FEATURE_ORDER)+1, 1, figsize=(12, 2*(len(FEATURE_ORDER)+1)), sharex=True)
+        axes[0].plot(session_df['mi'], label='MI', color='blue')
+        axes[0].set_ylabel('MI')
+        axes[0].legend()
+        for i, feat in enumerate(FEATURE_ORDER):
+            if feat in session_df.columns:
+                axes[i+1].plot(session_df[feat], label=feat)
+                axes[i+1].set_ylabel(feat)
+                axes[i+1].legend()
+        axes[-1].set_xlabel('Window')
+        plt.tight_layout()
+        plot_path = os.path.join(LOG_DIR, f'{user_id}_mi_features_over_time_{session_time}.png')
+        plt.savefig(plot_path)
+        print(f"[REPORT] MI and features plot saved to {plot_path}")
+        plt.close(fig)
     except Exception as e:
-        print(f"[ERROR] Error in compute_bandpower: {e}")
-        return 1.0  # Return small default value instead of error
-
-def resample_eda(eda_buffer, eda_timestamps, target_timestamps):
-    """
-    Resample/interpolated EDA to match target timestamps (EEG timestamps).
-    eda_buffer: list of [2,] arrays
-    eda_timestamps: list of floats
-    target_timestamps: list of floats (EEG timestamps)
-    Returns: np.array of shape (len(target_timestamps), 2)
-    """
-    eda_buffer = np.array(eda_buffer)
-    eda_timestamps = np.array(eda_timestamps)
-    target_timestamps = np.array(target_timestamps)
-    eda_resampled = np.zeros((len(target_timestamps), 2))
-    for ch in range(2):
-        eda_resampled[:, ch] = np.interp(target_timestamps, eda_timestamps, eda_buffer[:, ch])
-    return eda_resampled
-
-# --- Analyze input EEG and EDA ranges at the start ---
-def analyze_input_streams(eeg_inlet, eda_inlet, n_samples=500):
-    eeg_vals = []
-    eda_vals = []
-    for _ in range(n_samples):
-        if eeg_inlet is not None:
-            eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.5)
-            if eeg_sample is not None:
-                eeg_vals.append(np.array(eeg_sample[:8]))
-        if eda_inlet is not None:
-            eda_sample, _ = eda_inlet.pull_sample(timeout=0.5)
-            if eda_sample is not None:
-                eda_vals.append(np.array(eda_sample[:2]))
-    if eeg_vals:
-        eeg_arr = np.vstack(eeg_vals)
-        print("\n[EEG RAW DATA ANALYSIS]")
-        print(f"  Shape: {eeg_arr.shape}")
-        print(f"  Min: {np.min(eeg_arr):.3f}, Max: {np.max(eeg_arr):.3f}, Mean: {np.mean(eeg_arr):.3f}, Std: {np.std(eeg_arr):.3f}")
-        if np.issubdtype(eeg_arr.dtype, np.integer):
-            print("  [WARN] EEG data appears to be integer. RAW (unconverted, unnormalized) EEG is expected.")
-        if np.nanmax(np.abs(eeg_arr)) < 1.0:
-            print("  [WARN] EEG data values are very small (<1.0). RAW EEG is expected. Check your LSL stream.")
-        if np.nanmax(np.abs(eeg_arr)) > 1000:
-            print("  [WARN] EEG data values are very large (>1000). Check for amplifier scaling or units.")
-    if eda_vals:
-        eda_arr = np.vstack(eda_vals)
-        print("\n[EDA RAW DATA ANALYSIS]")
-        print(f"  Shape: {eda_arr.shape}")
-        print(f"  Min: {np.min(eda_arr):.5f}, Max: {np.max(eda_arr):.5f}, Mean: {np.mean(eda_arr):.5f}, Std: {np.std(eda_arr):.5f}")
-        if np.issubdtype(eda_arr.dtype, np.integer):
-            print("  [WARN] EDA data appears to be integer. RAW (unconverted, unnormalized) EDA is expected.")
-        if np.nanmax(np.abs(eda_arr)) < 0.01:
-            print("  [WARN] EDA data values are very small (<0.01). RAW EDA is expected. Check your LSL stream.")
-        if np.nanmax(np.abs(eda_arr)) > 10:
-            print("  [WARN] EDA data values are very large (>10). Check for scaling or units.")
-
-def generate_offline_report():
-    print("\n[OFFLINE MODE] Generating report from available files...")
-    import glob
-    import pandas as pd
-    import os
-    LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
-    USER_CONFIG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'user_configs')
-    # MI session summary
-    mi_files = glob.glob(os.path.join(LOG_DIR, '*_mi_session_*.csv'))
-    if mi_files:
-        print(f"Found {len(mi_files)} MI session files. Generating summary...")
-        summary = []
-        for f in mi_files:
-            try:
-                df = pd.read_csv(f)
-                if df.empty or not set(['mi']).issubset(df.columns):
-                    print(f"[WARN] Skipping empty or invalid MI session file: {os.path.basename(f)}")
-                    continue
-                mi_mean = df['mi'].mean()
-                mi_std = df['mi'].std()
-                focused_pct = (df['mi'] >= 0.5).mean() * 100
-                neutral_pct = ((df['mi'] >= 0.37) & (df['mi'] < 0.5)).mean() * 100
-                unfocused_pct = (df['mi'] < 0.37).mean() * 100
-                summary.append({'file': os.path.basename(f), 'mi_mean': mi_mean, 'mi_std': mi_std,
-                                'focused_pct': focused_pct, 'neutral_pct': neutral_pct, 'unfocused_pct': unfocused_pct})
-            except Exception as e:
-                print(f"[WARN] Could not process {os.path.basename(f)}: {e}")
-        if summary:
-            summary_path = os.path.join(LOG_DIR, 'mi_summary_report.csv')
-            pd.DataFrame(summary).to_csv(summary_path, index=False)
-            print(f"MI session summary saved to {summary_path}")
-        else:
-            print("No valid MI session files found for summary.")
-    else:
-        print("No MI session files found in logs/.")
-    # Calibration summary
-    baseline_files = glob.glob(os.path.join(USER_CONFIG_DIR, '*_baseline.csv'))
-    if baseline_files:
-        print(f"Found {len(baseline_files)} calibration baseline files.")
-    else:
-        print("No calibration baseline files found in user_configs/.")
-    # Model files
-    model_files = glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models', '*.joblib'))
-    if model_files:
-        print(f"Found {len(model_files)} model/scaler files in models/.")
-    else:
-        print("No model/scaler files found in models/.")
-    print("[OFFLINE MODE] Report generation complete.\n")
-
-def merge_reports_to_excel_and_pdf(user_id=None):
-    import pandas as pd
-    import glob
-    import os
-    from datetime import datetime
+        print(f"[WARN] Could not plot MI/features: {e}")
+    # --- Print and save summary statistics and feature-MI correlations ---
     try:
-        from fpdf import FPDF
-    except ImportError:
-        print("[WARN] fpdf not installed. PDF report will not be generated. Install with 'pip install fpdf'.")
-        FPDF = None
+        stats_report = []
+        print("\n[SUMMARY STATISTICS]")
+        for col in ['mi'] + FEATURE_ORDER:
+            if col in session_df.columns:
+                vals = session_df[col].dropna()
+                mean, std, vmin, vmax = vals.mean(), vals.std(), vals.min(), vals.max()
+                print(f"{col}: mean={mean:.3f}, std={std:.3f}, min={vmin:.3f}, max={vmax:.3f}")
+                stats_report.append({'variable': col, 'mean': mean, 'std': std, 'min': vmin, 'max': vmax})
+        stats_path = os.path.join(LOG_DIR, f'{user_id}_mi_feature_stats_{session_time}.csv')
+        pd.DataFrame(stats_report).to_csv(stats_path, index=False)
+        print(f"[REPORT] Summary statistics saved to {stats_path}")
+        # Feature-MI correlations
+        from scipy.stats import spearmanr
+        corr_report = []
+        print("\n[FEATURE-MI CORRELATIONS] (Spearman)")
+        for feat in FEATURE_ORDER:
+            if feat in session_df.columns:
+                corr, p = spearmanr(session_df[feat], session_df['mi'], nan_policy='omit')
+                print(f"{feat} vs MI: corr={corr:.3f}, p={p:.3g}")
+                corr_report.append({'feature': feat, 'spearman_corr': corr, 'p_value': p})
+        corr_path = os.path.join(LOG_DIR, f'{user_id}_mi_feature_corr_{session_time}.csv')
+        pd.DataFrame(corr_report).to_csv(corr_path, index=False)
+        print(f"[REPORT] Feature-MI correlations saved to {corr_path}")
+    except Exception as e:
+        print(f"[WARN] Could not compute summary stats/correlations: {e}")
 
-    log_dir = LOG_DIR
-    user = user_id if user_id else ''
-    # Find latest session_time for this user
-    mi_session_files = sorted(glob.glob(os.path.join(log_dir, f'{user}_mi_session_*.csv')))
-    if not mi_session_files:
-        print("[MERGE] No MI session files found to merge.")
-        return
-    latest_mi_session = mi_session_files[-1]
-    session_time = latest_mi_session.split('_mi_session_')[-1].replace('.csv','')
-    # Paths
-    summary_path = os.path.join(log_dir, f'{user}_mi_report_{session_time}.csv')
-    rt_class_path = os.path.join(log_dir, f'{user}_mi_realtime_classification_report_{session_time}.csv')
-    calib_comp_files = sorted(glob.glob(os.path.join(log_dir, f'{user}_calibration_comparative_*.csv')))
-    calib_comp_path = calib_comp_files[-1] if calib_comp_files else None
-
-    # Model file info
-    user_model_path = os.path.join(MODEL_DIR, f'{user}_svr_model.joblib')
-    global_model_path = os.path.join(MODEL_DIR, 'svm_model.joblib')
-    if os.path.exists(user_model_path):
-        model_used = user_model_path
-    elif os.path.exists(global_model_path):
-        model_used = global_model_path
-    else:
-        model_used = None
-    model_note = ""
-    if model_used:
-        model_time = datetime.fromtimestamp(os.path.getmtime(model_used)).strftime('%Y-%m-%d %H:%M:%S')
-        model_note = f"Model file: {os.path.basename(model_used)} (created: {model_time})"
-    else:
-        model_note = "Model file: Not found"
-
-    # Ensure all output files are labeled with user and date/time to avoid overwriting
-    excel_path = os.path.join(log_dir, f'{user}_merged_report_{session_time}.xlsx')
-    # Write Excel
-    with pd.ExcelWriter(excel_path) as writer:
-        pd.read_csv(latest_mi_session).to_excel(writer, sheet_name='MI Session', index=False)
-        if os.path.exists(summary_path):
-            pd.read_csv(summary_path).to_excel(writer, sheet_name='Session Summary', index=False)
-        if os.path.exists(rt_class_path):
-            pd.read_csv(rt_class_path).to_excel(writer, sheet_name='Real-time Classification', index=False)
-        if calib_comp_path and os.path.exists(calib_comp_path):
-            pd.read_csv(calib_comp_path).to_excel(writer, sheet_name='Calibration Comparative', index=False)
-        # Add model note as a separate sheet
-        pd.DataFrame([{"Model Info": model_note}]).to_excel(writer, sheet_name='Model Info', index=False)
-    print(f"[MERGE] Merged Excel report saved to {excel_path}")
-
-    # PDF summary
-    if FPDF is not None:
-        pdf_path = os.path.join(log_dir, f'{user}_merged_report_{session_time}.pdf')
-        pdf = FPDF()
-        pdf.add_page()
-        pdf.set_font('Arial', 'B', 16)
-        pdf.cell(0, 10, f'Mindfulness Index Session Report', ln=1)
-        pdf.set_font('Arial', '', 12)
-        pdf.cell(0, 10, f'User: {user}', ln=1)
-        pdf.cell(0, 10, f'Session Time: {session_time}', ln=1)
-        pdf.cell(0, 10, model_note, ln=1)
-        # Add summaries
-        if os.path.exists(summary_path):
-            pdf.set_font('Arial', 'B', 14)
-            pdf.cell(0, 10, 'Session Summary:', ln=1)
-            pdf.set_font('Arial', '', 12)
-            df = pd.read_csv(summary_path)
-            for col in df.columns:
-                pdf.cell(0, 8, f'{col}: {df.iloc[0][col]}', ln=1)
-        if os.path.exists(rt_class_path):
-            pdf.set_font('Arial', 'B', 14)
-            pdf.cell(0, 10, 'Real-time Classification:', ln=1)
-            pdf.set_font('Arial', '', 12)
-            df = pd.read_csv(rt_class_path)
-            for col in df.columns:
-                pdf.cell(0, 8, f'{col}: {df.iloc[0][col]}', ln=1)
-        # Compare user-specific and global calibration if both exist
-        global_calib_files = sorted(glob.glob(os.path.join(log_dir, f'calibration_comparative_*.csv')))
-        user_calib_mae, user_calib_r2 = None, None
-        global_calib_mae, global_calib_r2 = None, None
-        if calib_comp_path and os.path.exists(calib_comp_path):
-            pdf.set_font('Arial', 'B', 14)
-            pdf.cell(0, 10, 'Calibration Comparative:', ln=1)
-            pdf.set_font('Arial', '', 12)
-            df = pd.read_csv(calib_comp_path)
-            for col in df.columns:
-                pdf.cell(0, 8, f'{col}: {df.iloc[0][col]}', ln=1)
-            if 'new_mae' in df.columns:
-                user_calib_mae = df['new_mae'].iloc[0]
-            if 'new_r2' in df.columns:
-                user_calib_r2 = df['new_r2'].iloc[0]
-        # Find global calibration for comparison
-        for f in global_calib_files:
-            if user not in os.path.basename(f):  # crude filter for global
-                gdf = pd.read_csv(f)
-                if 'new_mae' in gdf.columns:
-                    global_calib_mae = gdf['new_mae'].iloc[0]
-                if 'new_r2' in gdf.columns:
-                    global_calib_r2 = gdf['new_r2'].iloc[0]
-                break
-        if user_calib_mae is not None and global_calib_mae is not None:
-            pdf.set_font('Arial', 'B', 13)
-            pdf.cell(0, 10, 'User vs Global Model Comparison:', ln=1)
-            pdf.set_font('Arial', '', 12)
-            pdf.cell(0, 8, f'User Model MAE: {user_calib_mae:.4f} | Global Model MAE: {global_calib_mae:.4f}', ln=1)
-            pdf.cell(0, 8, f'User Model R²: {user_calib_r2:.4f} | Global Model R²: {global_calib_r2:.4f}', ln=1)
-        pdf.output(pdf_path)
-        print(f"[MERGE] Merged PDF summary saved to {pdf_path}")
-    else:
-        print("[MERGE] PDF summary not generated (fpdf not installed).")
-
-# IMPORTANT: Always use the global scaler for all users.
-# Only the SVR model is adapted per user after calibration.
-# This ensures consistent feature scaling and reliable predictions.
-
-if __name__ == "__main__":
-    main()
+# --- Confirm required files and folders at startup ---
+REQUIRED_DIRS = [MODEL_DIR, LOG_DIR, VIS_DIR, PROCESSED_DATA_DIR, USER_CONFIG_DIR]
+REQUIRED_FILES = [MODEL_PATH, SCALER_PATH]
+def check_required_resources():
+    print("\n[CHECK] Confirming required directories and files...")
+    for d in REQUIRED_DIRS:
+        if not os.path.exists(d):
+            print(f"[MISSING] Directory not found: {d}")
+        else:
+            print(f"[OK] Directory: {d}")
+    for f in REQUIRED_FILES:
+        if not os.path.exists(f):
+            print(f"[MISSING] File not found: {f}")
+        else:
+            print(f"[OK] File: {f}")
+    print("")
 
 # --- Analysis and Visualization (separate section, not part of the pipeline) ---
 """
@@ -1340,3 +1418,7 @@ sns.pairplot(df[feature_names])
 plt.savefig('feature_pairplot.png')
 plt.show()
 """
+
+# --- MAIN ENTRY POINT ---
+if __name__ == "__main__":
+    main()
