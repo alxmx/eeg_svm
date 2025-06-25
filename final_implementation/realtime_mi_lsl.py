@@ -139,6 +139,78 @@ def compute_bandpower(data, sf, band, window_sec=None, relative=False):
     
     return bp
 
+def scale_features_for_mi(features):
+    """
+    Scale features to comparable ranges for proper MI calculation.
+    This addresses the critical issue where different feature magnitudes
+    cause unbalanced contributions to the final MI value.
+    
+    Parameters:
+    -----------
+    features : list or array
+        Raw features in order: [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
+    
+    Returns:
+    --------
+    scaled_features : numpy array
+        Features scaled to comparable ranges for balanced MI calculation
+    """
+    theta_fz, alpha_po, faa, beta_frontal, eda_norm = features
+    
+    # Convert EEG power values from scientific notation to more reasonable scale
+    # Multiply by 1e6 to convert from ~1e-6 to ~1.0 range
+    theta_scaled = theta_fz * 1e6
+    alpha_scaled = alpha_po * 1e6
+    beta_scaled = beta_frontal * 1e6
+    
+    # FAA is already in good range (~-0.5 to +0.5), keep as-is
+    faa_scaled = faa
+    
+    # Scale EDA to comparable range
+    eda_scaled = eda_norm * 1e6
+    
+    scaled_features = np.array([theta_scaled, alpha_scaled, faa_scaled, beta_scaled, eda_scaled])
+    
+    return scaled_features
+
+def calculate_mi_scaled(features):
+    """
+    Calculate MI using properly scaled features for balanced contribution.
+    This replaces the old calculate_mi function to ensure all features
+    contribute meaningfully to the final MI value.
+    """
+    # First scale the features to comparable ranges
+    scaled_features = scale_features_for_mi(features)
+    
+    # Use adjusted weights for the scaled features
+    # These weights are designed for the scaled feature ranges
+    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
+    
+    # Calculate weighted sum
+    raw_mi = np.dot(scaled_features, weights)
+    
+    # Apply sigmoid with adjusted parameters for scaled features
+    # Offset adjusted for the new feature scale
+    mi = 1 / (1 + np.exp(-(raw_mi - 0.5)))
+    
+    return mi
+
+def calculate_raw_mi_scaled(features):
+    """Calculate raw MI (pre-sigmoid) using scaled features for more dynamic range"""
+    scaled_features = scale_features_for_mi(features)
+    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
+    raw_mi = np.dot(scaled_features, weights) - 0.5
+    return raw_mi
+
+def calculate_emi_scaled(features):
+    """Calculate Emotional Mindfulness Index using scaled features"""
+    scaled_features = scale_features_for_mi(features)
+    # EMI gives more weight to frontal alpha asymmetry (FAA) and EDA
+    weights = np.array([0.15, 0.15, 0.4, -0.1, -0.2])
+    emi_raw = np.dot(scaled_features, weights) - 0.3
+    emi = 1 / (1 + np.exp(-2 * emi_raw))
+    return emi
+
 def calculate_raw_mi(features):
     """Calculate raw MI (pre-sigmoid) for more dynamic range"""
     weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
@@ -213,9 +285,9 @@ def load_user_baseline(user_id):
         }
     }
     
-    # Calculate baseline MI distribution
+    # Calculate baseline MI distribution using scaled features
     baseline_features = baseline_df[FEATURE_ORDER].values
-    baseline_mi = np.array([calculate_mi(f) for f in baseline_features])
+    baseline_mi = np.array([calculate_mi_scaled(f) for f in baseline_features])  # Use scaled MI calculation
     baseline_stats['mi_baseline'] = {
         'mean': np.mean(baseline_mi),
         'std': np.std(baseline_mi),
@@ -595,7 +667,7 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     print("[AUTO] Fine-tuning SVR model for this user based on calibration data...")
     calib_df = pd.read_csv(baseline_csv)
     X_calib = calib_df[FEATURE_ORDER].values
-    y_calib = np.array([calculate_mi(f) for f in X_calib])
+    y_calib = np.array([calculate_mi_scaled(f) for f in X_calib])  # Use scaled MI calculation
     
     # --- DEBUG: Check and log feature statistics ---
     feature_mins = np.min(X_calib, axis=0)
@@ -1205,8 +1277,8 @@ def main():
                     print("\n[DEBUG] Near-zero MI value detected!")
                     print(f"[DEBUG] Raw features: {sample[0]}")
                     print(f"[DEBUG] Scaled features: {x_scaled[0]}")
-                    recalc_mi = calculate_mi(sample[0])
-                    print(f"[DEBUG] Direct MI calculation: {recalc_mi}, Model prediction: {mi_pred}")
+                    recalc_mi = calculate_mi_scaled(sample[0])  # Use scaled version for comparison
+                    print(f"[DEBUG] Direct MI calculation (scaled): {recalc_mi}, Model prediction: {mi_pred}")
                     print(f"[DEBUG] Difference: {abs(recalc_mi - mi_pred):.6f}")
                     if abs(recalc_mi - mi_pred) > 0.1:
                         print("[DEBUG] Large difference between direct calculation and model! Check model training.")
@@ -1268,13 +1340,17 @@ def main():
                 mi_skipped_count = {}
             mi_skipped_count[skipped_reason] = mi_skipped_count.get(skipped_reason, 0) + 1
             
-        # Calculate additional indices for more dynamic feedback
-        raw_mi_value = calculate_raw_mi(sample[0])  # More dynamic range
-        emi_value = calculate_emi(sample[0])       # Emotional mindfulness index
+        # Calculate additional indices for more dynamic feedback using scaled features
+        raw_mi_value = calculate_raw_mi_scaled(sample[0])  # More dynamic range with proper scaling
+        emi_value = calculate_emi_scaled(sample[0])        # Emotional mindfulness index with proper scaling
         # Remap raw MI to 0-1 range for output
         raw_mi_remapped = remap_raw_mi(raw_mi_value)
-        # --- Print all MI values ---
-        print(f"[REAL-TIME] MI: {mi_pred:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f}")
+        
+        # Also calculate scaled MI for comparison/debugging
+        mi_scaled_direct = calculate_mi_scaled(sample[0])
+        
+        # --- Print all MI values with scaling comparison ---
+        print(f"[REAL-TIME] MI (SVR): {mi_pred:.3f} | MI (Scaled Direct): {mi_scaled_direct:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f}")
         
         # Use current time for samples
         current_ts = time.time()
@@ -1354,13 +1430,33 @@ def main():
     try:
         session_df = pd.read_csv(mi_csv_path)
         
-        # Create a comprehensive plot with MI and all 5 features
-        fig, axes = plt.subplots(6, 1, figsize=(15, 18), sharex=True)
+        # Add scaled features to the dataframe for comparison
+        print(f"[REPORT 2a] Computing scaled features for visualization...")
+        scaled_features_data = []
+        for _, row in session_df.iterrows():
+            if all(feat in row and not pd.isna(row[feat]) for feat in FEATURE_ORDER):
+                raw_features = [row[feat] for feat in FEATURE_ORDER]
+                scaled_features = scale_features_for_mi(raw_features)
+                scaled_features_data.append({
+                    'theta_fz_scaled': scaled_features[0],
+                    'alpha_po_scaled': scaled_features[1], 
+                    'faa_scaled': scaled_features[2],
+                    'beta_frontal_scaled': scaled_features[3],
+                    'eda_norm_scaled': scaled_features[4]
+                })
+            else:
+                scaled_features_data.append({feat + '_scaled': np.nan for feat in FEATURE_ORDER})
+        
+        scaled_df = pd.DataFrame(scaled_features_data)
+        session_df = pd.concat([session_df, scaled_df], axis=1)
+        
+        # Create a comprehensive plot with MI and all 5 features (both raw and scaled)
+        fig, axes = plt.subplots(11, 1, figsize=(15, 25), sharex=True)
         
         # Plot MI on the first subplot
-        axes[0].plot(session_df['mi'], label='MI', color='blue', linewidth=2)
+        axes[0].plot(session_df['mi'], label='MI (SVR)', color='blue', linewidth=2)
         axes[0].set_ylabel('MI Value', fontsize=12)
-        axes[0].set_title('Mindfulness Index and EEG/EDA Features Over Time', fontsize=14, fontweight='bold')
+        axes[0].set_title('Mindfulness Index and EEG/EDA Features Over Time (Raw vs Scaled)', fontsize=14, fontweight='bold')
         axes[0].legend(fontsize=10)
         axes[0].grid(True, alpha=0.3)
         axes[0].set_ylim(0, 1)
@@ -1374,27 +1470,42 @@ def main():
             'eda_norm': {'title': 'EDA (Normalized)', 'description': 'Arousal/Stress', 'color': 'brown'}
         }
         
-        # Plot each feature with enhanced styling
+        # Plot raw features (original problematic scale)
         for i, feat in enumerate(FEATURE_ORDER):
             if feat in session_df.columns:
                 feat_data = session_df[feat].dropna()
                 if len(feat_data) > 0:
                     axes[i+1].plot(feat_data, 
-                                 label=f"{feature_info[feat]['title']}", 
+                                 label=f"{feature_info[feat]['title']} (Raw)", 
                                  color=feature_info[feat]['color'], 
-                                 linewidth=1.5)
-                    axes[i+1].set_ylabel(f"{feat}\n({feature_info[feat]['description']})", fontsize=10)
+                                 linewidth=1.5, alpha=0.7)
+                    axes[i+1].set_ylabel(f"Raw {feat}\n(Original Scale)", fontsize=10)
                     axes[i+1].legend(fontsize=9)
                     axes[i+1].grid(True, alpha=0.3)
                     
-                    # Add statistical info in the title
+                    # Add statistical info and scale warning
                     mean_val = feat_data.mean()
                     std_val = feat_data.std()
-                    axes[i+1].set_title(f"Mean: {mean_val:.4f}, Std: {std_val:.4f}", fontsize=9)
-                else:
-                    axes[i+1].text(0.5, 0.5, f'No data for {feat}', 
-                                 transform=axes[i+1].transAxes, 
-                                 ha='center', va='center', fontsize=12)
+                    axes[i+1].set_title(f"Mean: {mean_val:.2e}, Std: {std_val:.2e} [UNSCALED - May appear flat]", fontsize=9, color='red')
+        
+        # Plot scaled features (properly balanced for MI calculation)
+        for i, feat in enumerate(FEATURE_ORDER):
+            scaled_feat = feat + '_scaled'
+            if scaled_feat in session_df.columns:
+                feat_data = session_df[scaled_feat].dropna()
+                if len(feat_data) > 0:
+                    axes[i+6].plot(feat_data, 
+                                 label=f"{feature_info[feat]['title']} (Scaled)", 
+                                 color=feature_info[feat]['color'], 
+                                 linewidth=2)
+                    axes[i+6].set_ylabel(f"Scaled {feat}\n(Balanced for MI)", fontsize=10)
+                    axes[i+6].legend(fontsize=9)
+                    axes[i+6].grid(True, alpha=0.3)
+                    
+                    # Add statistical info for scaled features
+                    mean_val = feat_data.mean()
+                    std_val = feat_data.std()
+                    axes[i+6].set_title(f"Mean: {mean_val:.3f}, Std: {std_val:.3f} [SCALED - Balanced contribution]", fontsize=9, color='green')
         
         axes[-1].set_xlabel('Time (seconds)', fontsize=12)
         plt.tight_layout()
