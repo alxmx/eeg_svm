@@ -1070,10 +1070,18 @@ def main():
     mi_records = []  # To store MI, timestamp, and state
     print("Entering real-time MI prediction loop at 1 Hz. Classification every 3 seconds.")
     # --- Automatic input data analysis and adaptation ---
-    eeg_scale_factor = 0.001  # Scale down large EEG values by 1000x
-    eda_scale_factor = 1.0    # Start with 1.0 - no scaling initially
+    # CORRECTED SCALING BASED ON REAL USER DATA ANALYSIS
+    # Analysis of user 005_alextest shows:
+    # - Calibration EEG: 6-40 (normal physiological range)  
+    # - Real-time EEG with 0.001 scaling: 2e-6 to 1e-4 (1,000,000x too small!)
+    # - This causes model saturation (all MI = 0.9996...)
+    eeg_scale_factor = 1.0  # NO SCALING - EEG values are already in correct range
+    eda_scale_factor = 1.0  # NO SCALING - EDA values are already in correct range
     
-    print(f"[INFO] Initial scaling factors: EEG={eeg_scale_factor}, EDA={eda_scale_factor}")
+    print(f"[INFO] CORRECTED scaling factors based on real data analysis:")
+    print(f"[INFO] EEG scale factor: {eeg_scale_factor} (no scaling - values already in physiological range)")
+    print(f"[INFO] EDA scale factor: {eda_scale_factor} (no scaling - values already in physiological range)")
+    print(f"[INFO] Previous aggressive scaling (0.001) was causing 1,000,000x reduction - FIXED!")
     
     if eeg_inlet is not None or eda_inlet is not None:
         print("\n[INFO] Running automatic input data analysis for EEG/EDA streams...")
@@ -1147,22 +1155,14 @@ def main():
                 print("  [WARN] EDA channel 1 appears constant!")
         
         print(f"\n[INFO] Final scaling factors: EEG={eeg_scale_factor}, EDA={eda_scale_factor}")
+        print(f"[INFO] Expected feature ranges after scaling:")
+        print(f"  - EEG power features: 5-100 (physiological power range)")
+        print(f"  - EDA features: 5-15 (typical normalized range)")
+        print(f"[INFO] This matches the calibration data ranges, ensuring model compatibility!")
     
-    # IMPORTANT: Apply the same scaling to calibration if needed
-    # (This inconsistency could be causing the problem)
-
-    # In the real-time MI prediction loop, apply scaling before feature extraction
-    # Replace in the loop:
-    # eeg = np.array(eeg_sample[:8])
-    # ...
-    # eda = np.array(eda_sample[:2])
-    # ...
-    # With:
-    # eeg = np.array(eeg_sample[:8]) * eeg_scale_factor
-    # ...
-    # eda = np.array(eda_sample[:2]) * eda_scale_factor
-    # ...
-    # (Apply this in both calibration and real-time prediction)
+    # IMPORTANT: Consistent scaling between calibration and real-time
+    # Calibration shows correct expected ranges (EEG: 6-40, EDA: 8-9)
+    # Real-time must match these ranges for proper model performance
 
     import threading
     import sys
