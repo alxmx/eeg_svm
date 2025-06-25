@@ -69,6 +69,12 @@ USER_CONFIG_DIR = os.path.join(BASE_DIR, 'user_configs')
 EEG_DIR = os.path.join(BASE_DIR, 'data', '_eeg')
 EDA_DIR = os.path.join(BASE_DIR, 'data', '_eda')
 
+# --- EDA CHANNEL CONFIGURATION ---
+# EDA channel to use for features (0-based indexing)
+# 0 = Channel 1, 1 = Channel 2
+# Adjust this if your EDA device uses different channels
+EDA_CHANNEL_INDEX = 1  # Currently using Channel 2 (index 1)
+
 # Create required directories
 for d in [MODEL_DIR, LOG_DIR, VIS_DIR, PROCESSED_DATA_DIR, USER_CONFIG_DIR, EEG_DIR, EDA_DIR]:
     os.makedirs(d, exist_ok=True)
@@ -623,7 +629,8 @@ def calibrate_user(user_id, calibration_duration_sec=60):
         acc_gyr = np.array(eeg_sample[8:14])
         eda_raw = np.array(eda_sample[:2])
         eda = eda_raw  # Note: No scaling applied in calibration!
-        eda_feat = eda[1]
+        # EDA CHANNEL SELECTION: Using configurable channel (see EDA_CHANNEL_INDEX at top)
+        eda_feat = eda[EDA_CHANNEL_INDEX]  # Channel configured at top of file
         
         # Debug EDA values during calibration
         if i % 250 == 0:  # Print every second
@@ -639,14 +646,14 @@ def calibrate_user(user_id, calibration_duration_sec=60):
             eda_win = np.array(eda_samples[-window_size:])
             
             # Debug EDA window during calibration
-            print(f"[DEBUG CALIB] EDA window {(i+1)//window_size}: ch0_mean={np.mean(eda_win[:,0]):.6f}, ch1_mean={np.mean(eda_win[:,1]):.6f}")
+            print(f"[DEBUG CALIB] EDA window {(i+1)//window_size}: ch0_mean={np.mean(eda_win[:,0]):.6f}, ch1_mean={np.mean(eda_win[:,1]):.6f}, using_channel={EDA_CHANNEL_INDEX}")
             
             sf = 250
             theta_fz = compute_bandpower(eeg_win[:,0], sf, (4,8))
             alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
             faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
             beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
-            eda_norm = np.mean(eda_win[:,1])  # Will be normalized by robust scaling later
+            eda_norm = np.mean(eda_win[:,EDA_CHANNEL_INDEX])  # Will be normalized by robust scaling later
             
             print(f"[DEBUG CALIB] EDA_NORM = {eda_norm:.6f}")
             
@@ -737,10 +744,19 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     # --- Train and save user-specific SVC classifier ---
     print("[AUTO] Training user-specific SVC classifier...")
     y_calib_binned = np.array([bin_mi(val) for val in y_calib])
-    svc = SVC().fit(X_calib_scaled, y_calib_binned)
-    user_svc_path = os.path.join(MODEL_DIR, f'{user_id}_svc_model.joblib')
-    dump(svc, user_svc_path)
-    print(f"[AUTO] User SVC classifier saved: {user_svc_path}")
+    unique_classes = np.unique(y_calib_binned)
+    
+    if len(unique_classes) < 2:
+        print(f"[WARNING] Cannot train SVC classifier: Only {len(unique_classes)} unique class(es) found in calibration data.")
+        print(f"[WARNING] MI values are too clustered (min={min(y_calib):.3f}, max={max(y_calib):.3f}).")
+        print("[WARNING] SVC training skipped. Will use SVR/thresholding approach instead.")
+        user_svc_path = None
+    else:
+        print(f"[INFO] Found {len(unique_classes)} classes for SVC training: {unique_classes}")
+        svc = SVC().fit(X_calib_scaled, y_calib_binned)
+        user_svc_path = os.path.join(MODEL_DIR, f'{user_id}_svc_model.joblib')
+        dump(svc, user_svc_path)
+        print(f"[AUTO] User SVC classifier saved: {user_svc_path}")
 
     # --- Evaluate new model ---
     y_new_pred = svr.predict(X_calib_scaled)
@@ -938,6 +954,8 @@ def main():
     print("==============================\n")
     print("[INFO] This script expects RAW (unconverted, unnormalized) EEG and EDA data from LSL streams.")
     print("[INFO] Do NOT pre-normalize or convert your EEG/EDA data before streaming to this script.")
+    print(f"[CONFIG] EDA Channel: Using channel {EDA_CHANNEL_INDEX + 1} (0-based index: {EDA_CHANNEL_INDEX}) for features")
+    print("[CONFIG] To change EDA channel, modify EDA_CHANNEL_INDEX at the top of this file")
     user_id = input("Enter user ID for this session: ")
     calibration_duration = 60
     print(f"Calibration will last {calibration_duration} seconds at 250 Hz.")
@@ -1204,7 +1222,7 @@ def main():
                     global_svc = test_svc
                     print(f"[INFO] Loaded global SVC classifier from {MODEL_PATH} (feature count unknown)")
             except Exception as e:
-                print(f"[WARN] Failed to load global SVC: {e}. Using SVR regression only.")
+                print(f"[WARN] Failed to load global SVC: {e}. Using SVR/thresholding approach.")
                 global_svc = None
         else:
             global_svc = None
@@ -1262,6 +1280,8 @@ def main():
         print(f"[DEBUG] EDA window shape: {eda_win.shape}")
         print(f"[DEBUG] EDA channel 0 stats: min={np.min(eda_win[:,0]):.6f}, max={np.max(eda_win[:,0]):.6f}, mean={np.mean(eda_win[:,0]):.6f}")
         print(f"[DEBUG] EDA channel 1 stats: min={np.min(eda_win[:,1]):.6f}, max={np.max(eda_win[:,1]):.6f}, mean={np.mean(eda_win[:,1]):.6f}")
+        print(f"[DEBUG] Using EDA channel {EDA_CHANNEL_INDEX} for features (configured at top of file)")
+        print(f"[DEBUG] ✓ CORRECT CHANNEL: Using Ch{EDA_CHANNEL_INDEX} ({np.mean(eda_win[:,EDA_CHANNEL_INDEX]):.1f}) NOT Ch0 ({np.mean(eda_win[:,0]):.0f})")
         
         # --- Feature extraction (windowed, real) ---
         sf = 250
@@ -1269,11 +1289,14 @@ def main():
         alpha_po = (compute_bandpower(eeg_win[:,6], sf, (8,13)) + compute_bandpower(eeg_win[:,7], sf, (8,13))) / 2
         faa = np.log(compute_bandpower(eeg_win[:,4], sf, (8,13)) + 1e-8) - np.log(compute_bandpower(eeg_win[:,5], sf, (8,13)) + 1e-8)
         beta_frontal = compute_bandpower(eeg_win[:,0], sf, (13,30))
-        eda_norm = normalize_eda_robust(eda_win[:,1])
+        # EDA CHANNEL SELECTION: Using configurable channel (see EDA_CHANNEL_INDEX at top)
+        eda_norm = normalize_eda_robust(eda_win[:,EDA_CHANNEL_INDEX])  # Channel configured at top of file
         
         # --- Debug EDA normalization ---
         print(f"[DEBUG] EDA_NORM calculation: robust normalized = {eda_norm:.6f}")
-        print(f"[DEBUG] EDA channel 1 raw values (first 10): {eda_win[:10,1]}")
+        print(f"[DEBUG] EDA channel {EDA_CHANNEL_INDEX} raw values (first 10): {eda_win[:10,EDA_CHANNEL_INDEX]}")
+        print(f"[DEBUG] CONFIRM: Using EDA channel {EDA_CHANNEL_INDEX + 1} (1-based) = index {EDA_CHANNEL_INDEX} (0-based)")
+        print(f"[DEBUG] EDA raw window stats: Ch0 mean={np.mean(eda_win[:,0]):.1f}, Ch1 mean={np.mean(eda_win[:,1]):.1f}")
         
         features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
         sample = np.array(features).reshape(1, -1)
@@ -1675,10 +1698,6 @@ plt.savefig('feature_pairplot.png')
 print("Feature pairplot saved to feature_pairplot.png")
 """
 
-# --- MAIN ENTRY POINT ---
-if __name__ == "__main__":
-    main()
-
 def normalize_eda_robust(eda_values):
     """
     Robust EDA normalization that handles extreme values and prevents overflow.
@@ -1716,3 +1735,7 @@ def normalize_eda_robust(eda_values):
         normalized = raw_mean
     
     return float(normalized)
+
+# --- MAIN ENTRY POINT ---
+if __name__ == "__main__":
+    main()
