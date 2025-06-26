@@ -1,0 +1,2 @@
+user_id,session_time,n_samples,mi_mean,mi_std,mi_min,mi_max,focused_pct,neutral_pct,unfocused_pct
+015_alex_test,20250626_211401,127,0.42827226613757413,0.1560546804964479,0.17572378803557442,0.8495467862825143,0.0,0.0,0.0
