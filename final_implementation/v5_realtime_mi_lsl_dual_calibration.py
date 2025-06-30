@@ -1746,3 +1746,6 @@ def test_eda_stream(eda_inlet, duration=5):
                 print(f"  → System will use Channel 1 for EDA")
     else:
         print(f"  No samples received - check stream connection!")
+
+if __name__ == "__main__":
+    main()
