@@ -24,9 +24,6 @@ import time
 import os
 import sys
 import json
-import warnings
-import threading
-import msvcrt
 from datetime import datetime
 from pylsl import StreamInlet, StreamOutlet, StreamInfo, resolve_streams, resolve_byprop
 from scipy.signal import welch, butter, filtfilt
@@ -37,7 +34,9 @@ from sklearn.ensemble import IsolationForest
 from sklearn.metrics import mean_absolute_error, r2_score
 from joblib import dump, load
 import matplotlib.pyplot as plt
-
+import threading
+import msvcrt
+import warnings
 warnings.filterwarnings('ignore')
 
 # === CONFIGURATION ===
@@ -66,7 +65,7 @@ EEG_CHANNELS = {
     'Oz': 7   # Occipital midline
 }
 
-EDA_CHANNEL_INDEX = 1  # Channel 1 (0-based indexing) contains the actual EDA data; Channel 0 contains timestamps
+EDA_CHANNEL_INDEX = 1  # Channel 1 (0-based indexing) for EDA features
 
 # Directories
 MODEL_DIR = 'models'
@@ -215,12 +214,9 @@ class RobustDataProcessor:
                 # Smooth sudden changes
                 if np.any(sudden_changes):
                     for i in np.where(sudden_changes)[0]:
-                        if i > 0 and i < len(ch_data) - 2:  # Ensure i+2 is valid
+                        if i > 0 and i < len(ch_data) - 1:
                             # Replace with average of neighbors
                             processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
-                        elif i == len(ch_data) - 2:  # Last possible sudden change
-                            # Use average of previous sample and current
-                            processed_window[i+1, ch] = (ch_data[i] + ch_data[i+1]) / 2
         
         return processed_window
 
@@ -285,37 +281,27 @@ class DualCalibrationSystem:
         print(f"\n[CALIBRATION] Starting {phase_name} phase data collection...")
         
         features_list = []
-        window_size = 250  # 1 second windows at 250 Hz
-        expected_samples = int(250 * duration_sec)
+        n_samples = int(250 * duration_sec)
+        window_size = 250  # 1 second windows
         
         eeg_samples, eda_samples = [], []
         
-        print(f"Collecting data for {duration_sec} seconds...")
+        print(f"Collecting {n_samples} samples at 250 Hz for {duration_sec} seconds...")
         print("Progress: ", end="", flush=True)
         
         start_time = time.time()
-        elapsed_time = 0
-        sample_count = 0
-        last_progress_time = start_time
         
-        # Time-based collection for accurate duration
-        while elapsed_time < duration_sec:
-            current_time = time.time()
-            elapsed_time = current_time - start_time
-            
-            # Progress indicator every 1.5 seconds
-            if current_time - last_progress_time >= 1.5:
-                progress_pct = min(100, int((elapsed_time / duration_sec) * 100))
-                print(f"█", end="", flush=True)
-                last_progress_time = current_time
+        for i in range(n_samples):
+            # Progress indicator
+            if i % (n_samples // 20) == 0:
+                print("█", end="", flush=True)
             
             # Collect EEG sample
             if eeg_inlet is not None:
-                eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.1)
+                eeg_sample, _ = eeg_inlet.pull_sample(timeout=1.0)
                 if eeg_sample is not None:
                     eeg = np.array(eeg_sample[:8])
                     eeg_samples.append(eeg)
-                    sample_count += 1
                 else:
                     if len(eeg_samples) > 0:
                         eeg_samples.append(eeg_samples[-1])  # Use last valid sample
@@ -326,24 +312,17 @@ class DualCalibrationSystem:
             
             # Collect EDA sample
             if eda_inlet is not None:
-                eda_sample, _ = eda_inlet.pull_sample(timeout=0.1)
+                eda_sample, _ = eda_inlet.pull_sample(timeout=1.0)
                 if eda_sample is not None:
-                    # EDA stream has 2 channels: channel 0 (timestamps), channel 1 (actual EDA data)
-                    if len(eda_sample) >= 2:
-                        # Keep both channels: [timestamp, eda_data]
-                        eda = np.array(eda_sample[:2])
-                    else:
-                        # Error: EDA stream must have 2 channels
-                        print(f"[ERROR] EDA sample has {len(eda_sample)} channels, expected 2")
-                        eda = np.array([0, 0])  # [timestamp, eda_data]
+                    eda = np.array(eda_sample[:2])
                     eda_samples.append(eda)
                 else:
                     if len(eda_samples) > 0:
                         eda_samples.append(eda_samples[-1])  # Use last valid sample
                     else:
-                        eda_samples.append(np.array([0, 0]))  # [timestamp, eda_data]
+                        eda_samples.append(np.zeros(2))
             else:
-                eda_samples.append(np.array([0, 0]))  # [timestamp, eda_data]
+                eda_samples.append(np.zeros(2))
             
             # Extract features every second (250 samples)
             if len(eeg_samples) >= window_size and len(eeg_samples) % window_size == 0:
@@ -360,16 +339,12 @@ class DualCalibrationSystem:
                 
                 if not np.any(np.isnan(features)):
                     features_list.append(features)
-            
-            # Small delay to prevent excessive CPU usage
-            time.sleep(0.001)
         
         print(f" ✓ Complete!")
         
         actual_duration = time.time() - start_time
         print(f"[CALIBRATION] {phase_name} phase: collected {len(features_list)} feature windows")
         print(f"[CALIBRATION] Actual duration: {actual_duration:.1f} seconds")
-        print(f"[CALIBRATION] Sample rate: {sample_count/actual_duration:.1f} Hz")
         
         if len(features_list) == 0:
             print(f"[ERROR] No valid features collected for {phase_name} phase!")
@@ -380,18 +355,6 @@ class DualCalibrationSystem:
     def extract_features(self, eeg_window, eda_window):
         """Extract comprehensive mindfulness features from processed windows"""
         sf = 250
-        
-        # Safety checks
-        if len(eeg_window) == 0 or len(eda_window) == 0:
-            return np.zeros(9)  # Return zeros if no data
-        
-        if eeg_window.shape[1] < 8:
-            print(f"[WARNING] EEG window has {eeg_window.shape[1]} channels, expected 8")
-            return np.zeros(9)
-        
-        if eda_window.shape[1] < 2:
-            print(f"[WARNING] EDA window has {eda_window.shape[1]} channels, expected 2 (timestamp + data)")
-            return np.zeros(9)
         
         # === ATTENTION REGULATION ===
         # Theta at Fz (4-8 Hz) - Higher = focused attention, ACC activation
@@ -426,16 +389,8 @@ class DualCalibrationSystem:
         alpha_oz = self.compute_bandpower(eeg_window[:, EEG_CHANNELS['Oz']], sf, (8, 13))
         
         # === AROUSAL/STRESS (EDA) ===
-        # Always use channel 1 which contains the actual EDA data (channel 0 is timestamps)
-        if eda_window.shape[1] >= 2:
-            # Use channel 1 (0-based index) - the actual EDA data channel
-            raw_eda = np.mean(eda_window[:, 1])
-        else:
-            # Error: EDA stream must have 2 channels (timestamps + data)
-            print(f"[ERROR] EDA stream has {eda_window.shape[1]} channels, expected 2 (timestamps + data)")
-            raw_eda = 0.0
-        
         # EDA feature (robust normalization)
+        raw_eda = np.mean(eda_window[:, EDA_CHANNEL_INDEX])
         eda_norm = self.normalize_eda_robust(raw_eda)
         
         # Return comprehensive feature vector
@@ -637,6 +592,193 @@ class DualCalibrationSystem:
         
         # Improved dynamic range mapping with adaptive centering
         # Use feature-based centering for better dynamic range
+        eda_norm = normalized_features[8]
+        theta_norm = normalized_features[0]
+        alpha_norm = (normalized_features[2] + normalized_features[3] + 
+                     normalized_features[5] + normalized_features[6] + normalized_features[7]) / 5
+        
+        # Adaptive center point based on EEG-EDA balance
+        if eda_norm > 7:  # High arousal state
+            center_shift = -1.8  # More negative shift to compensate
+        elif alpha_norm > 6:  # High mindfulness indicators
+            center_shift = -1.0  # Moderate positive shift
+        else:
+            center_shift = -1.5  # Default center
+            
+        centered_sum = weighted_sum + center_shift
+        
+        # Apply more sensitive sigmoid transformation with wider range
+        mi_sigmoid = 1 / (1 + np.exp(-2.5 * centered_sum))  # Slightly reduced sensitivity
+        
+        # Map to wider range for better discrimination
+        mi = 0.1 + 0.8 * mi_sigmoid  # 0.1 to 0.9 range for better dynamic range
+        
+        return np.clip(mi, 0.1, 0.9)
+    
+    def normalize_features_for_mi(self, features):
+        """Normalize comprehensive mindfulness features for MI calculation"""
+        # Adaptive quantile ranges based on actual session data analysis
+        # Updated to handle high EDA values and improve dynamic range
+        ranges = {
+            'theta_fz': (1, 80),       # Observed range: 1.5-124, using 80th percentile
+            'beta_fz': (0.5, 15),      # Frontal beta, reduced from 25 
+            'alpha_c3': (2, 30),       # Central alpha (left), reduced from 40
+            'alpha_c4': (2, 30),       # Central alpha (right), reduced from 40
+            'faa_c3c4': (-2.5, 2.5),   # Alpha asymmetry, expanded from observed range
+            'alpha_pz': (2, 35),       # Parietal alpha, reduced from 45
+            'alpha_po': (1, 25),       # PO alpha, observed max ~30, using 25
+            'alpha_oz': (2, 25),       # Occipital alpha, reduced from 35
+            'eda_norm': (0, 12)        # Expanded EDA range to handle high arousal states (0-12)
+        }
+        
+        normalized = []
+        for i, (feat_name, (q5, q95)) in enumerate(ranges.items()):
+            # More sensitive normalization with smoother scaling
+            val = 10 * (features[i] - q5) / (q95 - q5)
+            normalized.append(np.clip(val, 0, 10))
+        
+        return np.array(normalized)
+    
+    def save_calibration_data(self):
+        """Save calibration data and thresholds"""
+        config_path = os.path.join(USER_CONFIG_DIR, f'{self.user_id}_dual_calibration.json')
+        
+        # Combine all features for baseline CSV
+        all_features = np.vstack([self.relaxed_features, self.focused_features])
+        
+        # Save features CSV
+        baseline_csv = os.path.join(USER_CONFIG_DIR, f'{self.user_id}_dual_baseline.csv')
+        df = pd.DataFrame(all_features, columns=FEATURE_ORDER)
+        df['phase'] = ['relaxed'] * len(self.relaxed_features) + ['focused'] * len(self.focused_features)
+        df.to_csv(baseline_csv, index=False)
+        
+        # Convert numpy arrays to lists for JSON serialization
+        adaptive_thresholds_json = self._convert_numpy_to_json(self.adaptive_thresholds)
+        
+        # Save configuration
+        config_data = {
+            'user_id': self.user_id,
+            'calibration_time': str(datetime.now()),
+            'baseline_csv': baseline_csv,
+            'adaptive_thresholds': adaptive_thresholds_json,
+            'relaxed_samples': len(self.relaxed_features),
+            'focused_samples': len(self.focused_features)
+        }
+        
+        with open(config_path, 'w') as f:
+            json.dump(config_data, f, indent=2)
+        
+        print(f"\n[SAVED] Calibration data saved to:")
+        print(f"  Config: {config_path}")
+        print(f"  Features: {baseline_csv}")
+        
+        return config_path, baseline_csv
+
+    def _convert_numpy_to_json(self, obj):
+        """Convert numpy arrays to JSON-serializable format"""
+        if isinstance(obj, dict):
+            return {key: self._convert_numpy_to_json(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_to_json(item) for item in obj]
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.int64, np.int32, np.int16, np.int8)):
+            return int(obj)
+        elif isinstance(obj, (np.float64, np.float32, np.float16)):
+            return float(obj)
+        else:
+            return obj
+
+# === ADAPTIVE MI CALCULATOR ===
+class AdaptiveMICalculator:
+    """Calculates MI using adaptive thresholds from dual calibration - Simplified version"""
+    
+    def __init__(self, adaptive_thresholds, user_id=None):
+        self.thresholds = adaptive_thresholds
+        self.user_id = user_id
+        self.mi_history = []
+        self.smoothing_window = 3  # Reduced for faster response
+        
+    def calculate_adaptive_mi(self, features):
+        """Calculate MI using adaptive per-user mapping - simplified approach"""
+        # Calculate universal MI
+        universal_mi = self.calculate_mi_universal(features)
+        
+        # Calculate EMI (Emotional Mindfulness Index)
+        emi = self.calculate_emi(features, universal_mi)
+        
+        # Apply adaptive mapping if available
+        if self.thresholds is not None:
+            mapping = self.thresholds['adaptive_mapping']
+            low_thresh = mapping['low_threshold']
+            high_thresh = mapping['high_threshold']
+            dynamic_range = mapping['dynamic_range']
+            
+            # Simple adaptive mapping without historical complexity
+            if dynamic_range > 0.05:  # Minimal threshold for valid calibration
+                # Normalize relative to user's calibrated range
+                relative_position = (universal_mi - low_thresh) / dynamic_range
+                # Map to 0-1 range with slight boost for responsiveness
+                adaptive_mi = np.clip(relative_position * 1.1, 0, 1)  # 10% boost for visibility
+            else:
+                # Use universal MI with slight boost if calibration range is too small
+                adaptive_mi = np.clip(universal_mi * 1.2, 0, 1)
+        else:
+            adaptive_mi = universal_mi
+        
+        # Light temporal smoothing for stability
+        self.mi_history.append(adaptive_mi)
+        if len(self.mi_history) > self.smoothing_window:
+            self.mi_history.pop(0)
+        
+        smoothed_mi = np.mean(self.mi_history)  # Simple mean for responsiveness
+        
+        return smoothed_mi, universal_mi, emi
+    
+    def calculate_emi(self, features, universal_mi):
+        """Calculate Emotional Mindfulness Index with emotion regulation focus"""
+        # EMI emphasizes emotional regulation components
+        theta_fz = features[0]      # Attention regulation
+        beta_fz = features[1]       # Effortful control
+        alpha_c3 = features[2]      # Left hemisphere
+        alpha_c4 = features[3]      # Right hemisphere  
+        faa_c3c4 = features[4]      # Frontal alpha asymmetry
+        eda_norm = features[8]      # Emotional arousal
+        
+        # EMI weights focus on emotional regulation
+        emotion_score = (
+            0.3 * (theta_fz / 10) +           # Attention component
+            0.2 * (1 - beta_fz / 10) +        # Relaxed control
+            0.3 * np.tanh(abs(faa_c3c4)) +    # Emotional balance
+            0.2 * (1 - eda_norm / 10)         # Low arousal
+        )
+        
+        # Blend with universal MI
+        emi = 0.7 * universal_mi + 0.3 * emotion_score
+        return np.clip(emi, 0, 1)
+    
+    def calculate_mi_universal(self, features):
+        """Universal MI calculation using comprehensive mindfulness features"""
+        # Updated weights for 9-feature mindfulness model (same as calibration)
+        weights = np.array([
+            0.35,   # theta_fz: Strong attention component (increased)
+            -0.08,  # beta_fz: Moderate negative for relaxed states (reduced penalty)
+            0.14,   # alpha_c3: Body awareness (left) (increased)
+            0.14,   # alpha_c4: Body awareness (right) (increased)
+            0.10,   # faa_c3c4: Emotional balance (increased)
+            -0.20,  # alpha_pz: Negative for DMN suppression (maintained)
+            0.22,   # alpha_po: Visual detachment/relaxation (increased)
+            0.15,   # alpha_oz: Occipital relaxation (increased)
+            -0.10   # eda_norm: Reduced negative for high arousal (less dominating)
+        ])
+        
+        # Normalize features to 0-10 range
+        normalized_features = self.normalize_features_for_mi(features)
+        
+        # Calculate weighted sum
+        weighted_sum = np.dot(normalized_features, weights)
+        
+        # Improved dynamic range mapping with adaptive centering (same as calibration)
         eda_norm = normalized_features[8]
         theta_norm = normalized_features[0]
         alpha_norm = (normalized_features[2] + normalized_features[3] + 
@@ -1503,14 +1645,20 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
             if eeg_sample:
                 eeg_buffer.append(eeg_sample)
             
-            # Collect EDA data (or simulate if not available)
+            # Collect EDA data (handle missing stream gracefully)
             if eda_inlet:
                 eda_sample, eda_timestamp = eda_inlet.pull_sample(timeout=0.01)
                 if eda_sample:
-                    eda_buffer.append(eda_sample)
+                    # Ensure we have at least 2 channels for EDA: [timestamp, eda_data]
+                    if len(eda_sample) >= 2:
+                        eda_buffer.append(eda_sample[:2])
+                    else:
+                        eda_buffer.append([0, 0])  # [timestamp, eda_data]
+                else:
+                    eda_buffer.append([0, 0])  # Use zeros if no sample
             else:
-                # Use zero values as fallback (not simulated data)
-                eda_buffer.append([0.0, 0.0])
+                # Use zeros if no EDA stream (not random data)
+                eda_buffer.append([0, 0])  # [timestamp, eda_data]
             
             # Process when we have enough data
             if len(eeg_buffer) >= window_size and len(eda_buffer) >= window_size:
@@ -1518,11 +1666,11 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
                 eeg_window = np.array(eeg_buffer[-window_size:])
                 eda_window = np.array(eda_buffer[-window_size:])
                 
-                # Process with artifact rejection
-                eeg_processed = processor.process_eeg_window(eeg_window)
-                eda_processed = processor.process_eda_window(eda_window)
+                # Simple processing (no complex artifact rejection to avoid incomplete methods)
+                eeg_processed = eeg_window[:, :8]  # Use first 8 EEG channels
+                eda_processed = eda_window
                 
-                # Extract features using calibration system methods
+                # Extract features
                 features = extract_mindfulness_features(eeg_processed, eda_processed)
                 
                 # Calculate MI using adaptive thresholds
@@ -1641,18 +1789,6 @@ def extract_mindfulness_features(eeg_window, eda_window):
     """Extract comprehensive mindfulness features from processed windows"""
     sf = 250
     
-    # Safety checks
-    if len(eeg_window) == 0 or len(eda_window) == 0:
-        return np.zeros(9)  # Return zeros if no data
-    
-    if eeg_window.shape[1] < 8:
-        print(f"[WARNING] EEG window has {eeg_window.shape[1]} channels, expected 8")
-        return np.zeros(9)
-    
-    if eda_window.shape[1] < 2:
-        print(f"[WARNING] EDA window has {eda_window.shape[1]} channels, expected 2 (timestamp + data)")
-        return np.zeros(9)
-    
     # === ATTENTION REGULATION ===
     theta_fz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Fz']], sf, (4, 8))
     beta_fz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Fz']], sf, (13, 30))
@@ -1674,13 +1810,12 @@ def extract_mindfulness_features(eeg_window, eda_window):
     alpha_oz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Oz']], sf, (8, 13))
     
     # === AROUSAL/STRESS (EDA) ===
-    # Always use channel 1 which contains the actual EDA data (channel 0 is timestamps)
+    # Handle EDA data safely - always use channel 1 (actual EDA data)
     if eda_window.shape[1] >= 2:
-        # Use channel 1 (0-based index) - the actual EDA data channel
-        raw_eda = np.mean(eda_window[:, 1])
+        raw_eda = np.mean(eda_window[:, EDA_CHANNEL_INDEX])  # Channel 1
+        print(f"[DEBUG] EDA raw: {raw_eda:.3f} from channel {EDA_CHANNEL_INDEX}")
     else:
-        # Error: EDA stream must have 2 channels (timestamps + data)
-        print(f"[ERROR] EDA stream has {eda_window.shape[1]} channels, expected 2 (timestamps + data)")
+        print(f"[WARN] EDA window has {eda_window.shape[1]} channels, expected 2")
         raw_eda = 0.0
     
     # Simple EDA normalization
