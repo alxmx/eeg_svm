@@ -190,34 +190,31 @@ class RobustDataProcessor:
         return processed_window
     
     def process_eda_window(self, eda_window):
-        """Process EDA window with smoothing and artifact rejection"""
+        """Process EDA window with smoothing and artifact rejection (only channel 1 is used)"""
         if len(eda_window) == 0:
             return eda_window
         
         processed_window = np.copy(eda_window)
-        
-        # Apply median filter for smoothing
-        for ch in range(processed_window.shape[1]):
-            processed_window[:, ch] = self.median_filter_1d(
-                processed_window[:, ch], self.median_filter_size
-            )
-        
-        # EDA-specific processing: remove sudden jumps
-        for ch in range(processed_window.shape[1]):
+        ch = 1  # Only process channel 1 (EDA data)
+        if processed_window.shape[1] > ch:
+            # Apply median filter for smoothing
+            processed_window[:, ch] = self.median_filter_1d(processed_window[:, ch], self.median_filter_size)
+            # EDA-specific processing: remove sudden jumps
             ch_data = processed_window[:, ch]
-            # Detect sudden changes (derivative-based)
             if len(ch_data) > 1:
                 diff = np.diff(ch_data)
                 diff_threshold = np.std(diff) * 3  # 3-sigma threshold
                 sudden_changes = np.abs(diff) > diff_threshold
-                
-                # Smooth sudden changes
-                if np.any(sudden_changes):
-                    for i in np.where(sudden_changes)[0]:
-                        if i > 0 and i < len(ch_data) - 1:
-                            # Replace with average of neighbors
-                            processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
-        
+                for i in np.where(sudden_changes)[0]:
+                    # Only smooth if i+2 is within bounds
+                    if i+2 < len(ch_data):
+                        processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
+                    # If at the end, just copy previous value
+                    elif i+1 < len(ch_data):
+                        processed_window[i+1, ch] = ch_data[i]
+        # Set channel 0 to zero (or leave unchanged, as it's not used)
+        if processed_window.shape[1] > 0:
+            processed_window[:, 0] = 0
         return processed_window
 
 # === DUAL CALIBRATION SYSTEM ===
@@ -1746,6 +1743,3 @@ def test_eda_stream(eda_inlet, duration=5):
                 print(f"  → System will use Channel 1 for EDA")
     else:
         print(f"  No samples received - check stream connection!")
-
-if __name__ == "__main__":
-    main()
