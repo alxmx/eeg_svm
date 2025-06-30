@@ -157,78 +157,67 @@ class RobustDataProcessor:
         return outlier_mask
     
     def process_eeg_window(self, eeg_window):
-        """Process EEG window with peak suppression and artifact rejection"""
+        """Process EEG window with artifact rejection and peak suppression"""
         if len(eeg_window) == 0:
-            return np.zeros((self.window_size, 8))
+            return eeg_window
         
-        eeg_window = np.array(eeg_window)
-        if eeg_window.ndim == 1:
-            eeg_window = eeg_window.reshape(-1, 8)
+        processed_window = np.copy(eeg_window)
         
-        processed = np.copy(eeg_window)
+        # Apply median filter to each channel to suppress peaks
+        for ch in range(processed_window.shape[1]):
+            processed_window[:, ch] = self.median_filter_1d(
+                processed_window[:, ch], self.median_filter_size
+            )
         
-        # Apply median filtering to suppress peaks
-        for ch in range(processed.shape[1]):
-            processed[:, ch] = self.median_filter_1d(processed[:, ch], self.median_filter_size)
+        # Detect and remove outliers
+        outlier_mask = self.detect_outliers_robust(processed_window, method='mad')
         
-        # Detect and handle outliers
-        outlier_mask = self.detect_outliers_robust(processed)
-        
+        # Replace outliers with interpolated values
         if np.any(outlier_mask):
-            # Replace outliers with median values
-            for ch in range(processed.shape[1]):
-                ch_data = processed[:, ch]
-                if len(ch_data[~outlier_mask]) > 0:
-                    median_val = np.median(ch_data[~outlier_mask])
-                    processed[outlier_mask, ch] = median_val
+            for ch in range(processed_window.shape[1]):
+                ch_data = processed_window[:, ch]
+                if np.sum(outlier_mask) < len(ch_data) * 0.5:  # If less than 50% outliers
+                    # Simple linear interpolation
+                    valid_indices = np.where(~outlier_mask)[0]
+                    outlier_indices = np.where(outlier_mask)[0]
+                    
+                    if len(valid_indices) > 1:
+                        processed_window[outlier_indices, ch] = np.interp(
+                            outlier_indices, valid_indices, ch_data[valid_indices]
+                        )
         
-        # Ensure we have the right shape
-        if processed.shape[0] != self.window_size:
-            if processed.shape[0] > self.window_size:
-                processed = processed[:self.window_size, :]
-            else:
-                # Pad with last values if too short
-                padding = np.tile(processed[-1, :], (self.window_size - processed.shape[0], 1))
-                processed = np.vstack([processed, padding])
-        
-        return processed
+        return processed_window
     
     def process_eda_window(self, eda_window):
-        """Process EDA window with peak suppression and artifact rejection"""
+        """Process EDA window with smoothing and artifact rejection"""
         if len(eda_window) == 0:
-            return np.zeros((self.window_size, 2))
+            return eda_window
         
-        eda_window = np.array(eda_window)
-        if eda_window.ndim == 1:
-            eda_window = eda_window.reshape(-1, 2)
+        processed_window = np.copy(eda_window)
         
-        processed = np.copy(eda_window)
+        # Apply median filter for smoothing
+        for ch in range(processed_window.shape[1]):
+            processed_window[:, ch] = self.median_filter_1d(
+                processed_window[:, ch], self.median_filter_size
+            )
         
-        # Apply median filtering to suppress peaks
-        for ch in range(processed.shape[1]):
-            processed[:, ch] = self.median_filter_1d(processed[:, ch], self.median_filter_size)
+        # EDA-specific processing: remove sudden jumps
+        for ch in range(processed_window.shape[1]):
+            ch_data = processed_window[:, ch]
+            # Detect sudden changes (derivative-based)
+            if len(ch_data) > 1:
+                diff = np.diff(ch_data)
+                diff_threshold = np.std(diff) * 3  # 3-sigma threshold
+                sudden_changes = np.abs(diff) > diff_threshold
+                
+                # Smooth sudden changes
+                if np.any(sudden_changes):
+                    for i in np.where(sudden_changes)[0]:
+                        if i > 0 and i < len(ch_data) - 1:
+                            # Replace with average of neighbors
+                            processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
         
-        # Detect and handle outliers
-        outlier_mask = self.detect_outliers_robust(processed)
-        
-        if np.any(outlier_mask):
-            # Replace outliers with median values
-            for ch in range(processed.shape[1]):
-                ch_data = processed[:, ch]
-                if len(ch_data[~outlier_mask]) > 0:
-                    median_val = np.median(ch_data[~outlier_mask])
-                    processed[outlier_mask, ch] = median_val
-        
-        # Ensure we have the right shape
-        if processed.shape[0] != self.window_size:
-            if processed.shape[0] > self.window_size:
-                processed = processed[:self.window_size, :]
-            else:
-                # Pad with last values if too short
-                padding = np.tile(processed[-1, :], (self.window_size - processed.shape[0], 1))
-                processed = np.vstack([processed, padding])
-        
-        return processed
+        return processed_window
 
 # === DUAL CALIBRATION SYSTEM ===
 class DualCalibrationSystem:
@@ -1507,4 +1496,315 @@ def run_dual_calibration(user_id, eeg_inlet, eda_inlet):
         eeg_inlet, eda_inlet, 30, 'FOCUSED'
     )
     
-    if focused_features is None
+    if focused_features is None:
+        print("[ERROR] Focused calibration failed!")
+        return None
+    
+    calibration_system.focused_features = focused_features
+    print(f"✓ Focused baseline captured: {len(focused_features)} windows")
+    
+    # Compute adaptive thresholds
+    adaptive_thresholds = calibration_system.compute_adaptive_thresholds()
+    
+    if adaptive_thresholds is None:
+        print("[ERROR] Failed to compute adaptive thresholds!")
+        return None
+    
+    # Save calibration data
+    config_path, features_csv = calibration_system.save_calibration_data()
+    
+    print(f"\n{'='*60}")
+    print("DUAL CALIBRATION COMPLETE!")
+    print(f"{'='*60}")
+    print(f"✓ Relaxed baseline: {len(relaxed_features)} samples")
+    print(f"✓ Focused baseline: {len(focused_features)} samples")
+    print(f"✓ Adaptive thresholds computed")
+    print(f"✓ Data saved to: {config_path}")
+    
+    return adaptive_thresholds
+
+def main():
+    """Main function for dual calibration MI pipeline"""
+    display_feature_guide()
+    
+    # Get user ID
+    user_id = input("Enter user ID for this session: ").strip()
+    if not user_id:
+        user_id = f"user_{int(time.time())}"
+        print(f"Using default user ID: {user_id}")
+    
+    print(f"\n[SETUP] Initializing session for user: {user_id}")
+    
+    # Setup LSL streams
+    print("\n[LSL] Setting up data streams...")
+    eeg_stream = select_lsl_stream('EEG', name_hint='EEG')
+    if eeg_stream is None:
+        print("[ERROR] No EEG stream selected. Exiting...")
+        return
+    
+    eda_stream = select_lsl_stream('EDA', name_hint='EDA', allow_skip=True)
+    if eda_stream is None:
+        print("[WARNING] No EDA stream found. Using simulated EDA data...")
+        eda_inlet = None
+    else:
+        eda_inlet = StreamInlet(eda_stream)
+    
+    eeg_inlet = StreamInlet(eeg_stream)
+    
+    # Setup output streams
+    output_streams = setup_mindfulness_lsl_streams()
+    
+    print("\n[READY] All streams configured successfully!")
+    
+    # Run dual calibration
+    adaptive_thresholds = run_dual_calibration(user_id, eeg_inlet, eda_inlet)
+    
+    if adaptive_thresholds is None:
+        print("[ERROR] Calibration failed. Cannot proceed to real-time processing.")
+        return
+    
+    # Initialize MI calculator with adaptive thresholds
+    mi_calculator = AdaptiveMICalculator(adaptive_thresholds, user_id)
+    
+    print(f"\n{'='*80}")
+    print("CALIBRATION COMPLETE - READY FOR REAL-TIME PROCESSING")
+    print(f"{'='*80}")
+    print("✓ Ready for adaptive real-time MI calculation")
+    print("✓ Personalized thresholds loaded")
+    print("✓ Output streams active")
+    print("\nPress Enter to start real-time processing (or 'q' to quit)...")
+    
+    choice = input().strip().lower()
+    if choice == 'q':
+        print("Exiting...")
+        return
+    
+    # Real-time processing
+    run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_calculator)
+
+def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_calculator):
+    """Run real-time MI processing with dual calibration"""
+    print(f"\n{'='*60}")
+    print("STARTING REAL-TIME MI PROCESSING")
+    print(f"{'='*60}")
+    print("Press 'q' and Enter to stop...")
+    
+    # Initialize data processor and visualizer
+    processor = RobustDataProcessor()
+    visualizer = OnlineVisualizer()
+    
+    # Session logging
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    session_file = os.path.join(LOG_DIR, f'{user_id}_mi_session_{timestamp}.csv')
+    feature_stats_file = os.path.join(LOG_DIR, f'{user_id}_mi_feature_stats_{timestamp}.csv')
+    feature_corr_file = os.path.join(LOG_DIR, f'{user_id}_mi_feature_corr_{timestamp}.csv')
+    
+    # Data collection
+    session_data = []
+    feature_data = []
+    
+    # Real-time loop
+    eeg_buffer = []
+    eda_buffer = []
+    window_size = 250  # 1-second windows at 250 Hz
+    
+    print("USING ADAPTIVE MI CALCULATION")
+    print("Collecting data...")
+    
+    start_time = time.time()
+    last_display = 0
+    
+    try:
+        # Setup input monitoring thread
+        stop_event = threading.Event()
+        
+        def input_monitor():
+            while not stop_event.is_set():
+                if msvcrt.kbhit():
+                    key = msvcrt.getch().decode('utf-8').lower()
+                    if key == 'q':
+                        stop_event.set()
+                        break
+                time.sleep(0.1)
+        
+        input_thread = threading.Thread(target=input_monitor, daemon=True)
+        input_thread.start()
+        
+        while not stop_event.is_set():
+            current_time = time.time()
+            
+            # Collect EEG data
+            eeg_sample, eeg_timestamp = eeg_inlet.pull_sample(timeout=0.01)
+            if eeg_sample:
+                eeg_buffer.append(eeg_sample)
+            
+            # Collect EDA data (or simulate if not available)
+            if eda_inlet:
+                eda_sample, eda_timestamp = eda_inlet.pull_sample(timeout=0.01)
+                if eda_sample:
+                    eda_buffer.append(eda_sample)
+            else:
+                # Simulate EDA data
+                eda_buffer.append([np.random.normal(5, 1)])
+            
+            # Process when we have enough data
+            if len(eeg_buffer) >= window_size and len(eda_buffer) >= window_size:
+                # Extract windows
+                eeg_window = np.array(eeg_buffer[-window_size:])
+                eda_window = np.array(eda_buffer[-window_size:])
+                
+                # Process with artifact rejection
+                eeg_processed = processor.process_eeg_window(eeg_window)
+                eda_processed = processor.process_eda_window(eda_window)
+                
+                # Extract features using calibration system methods
+                features = extract_mindfulness_features(eeg_processed, eda_processed)
+                
+                # Calculate MI using adaptive thresholds
+                adaptive_mi, universal_mi, emi = mi_calculator.calculate_adaptive_mi(features)
+                
+                # Send to output streams
+                output_streams['mi'].push_sample([adaptive_mi])
+                output_streams['raw_mi'].push_sample([universal_mi])
+                output_streams['emi'].push_sample([emi])
+                
+                # Update visualizer
+                visualizer.update(adaptive_mi, universal_mi, emi)
+                
+                # Store session data
+                session_data.append({
+                    'mi': adaptive_mi,
+                    'raw_mi': universal_mi,
+                    'emi': emi,
+                    'timestamp': current_time,
+                    'state': 'unknown',
+                    **{f: features[i] for i, f in enumerate(FEATURE_ORDER)}
+                })
+                
+                feature_data.append(features)
+                
+                # Display progress
+                if current_time - last_display > 1.0:  # Every second
+                    elapsed = current_time - start_time
+                    print(f"TIME: {elapsed:6.1f}s | "
+                          f"MI: {adaptive_mi:.3f} | "
+                          f"RAW: {universal_mi:.3f} | "
+                          f"EMI: {emi:.3f} | "
+                          f"THETA: {features[0]:.1f} | "
+                          f"ALPHA_PO: {features[6]:.1f} | "
+                          f"EDA: {features[8]:.1f}")
+                    last_display = current_time
+                
+                # Maintain buffer size
+                if len(eeg_buffer) > window_size * 2:
+                    eeg_buffer = eeg_buffer[-window_size:]
+                if len(eda_buffer) > window_size * 2:
+                    eda_buffer = eda_buffer[-window_size:]
+            
+            time.sleep(0.001)  # Small delay to prevent CPU overload
+    
+    except KeyboardInterrupt:
+        print("\nStopping on user request...")
+    
+    print(f"\n{'='*60}")
+    print("REAL-TIME PROCESSING COMPLETE")
+    print(f"{'='*60}")
+    
+    # Save session data
+    if session_data:
+        df_session = pd.DataFrame(session_data)
+        df_session.to_csv(session_file, index=False)
+        print(f"✓ Session data saved: {session_file}")
+        
+        # Save feature statistics
+        if feature_data:
+            feature_array = np.array(feature_data)
+            feature_stats = []
+            
+            for i, feature_name in enumerate(FEATURE_ORDER):
+                stats = {
+                    'variable': feature_name,
+                    'mean': np.mean(feature_array[:, i]),
+                    'std': np.std(feature_array[:, i]),
+                    'min': np.min(feature_array[:, i]),
+                    'max': np.max(feature_array[:, i])
+                }
+                feature_stats.append(stats)
+            
+            # Add MI statistics
+            mi_values = [d['mi'] for d in session_data]
+            feature_stats.append({
+                'variable': 'mi',
+                'mean': np.mean(mi_values),
+                'std': np.std(mi_values),
+                'min': np.min(mi_values),
+                'max': np.max(mi_values)
+            })
+            
+            df_stats = pd.DataFrame(feature_stats)
+            df_stats.to_csv(feature_stats_file, index=False)
+            print(f"✓ Feature statistics saved: {feature_stats_file}")
+            
+            # Calculate feature correlations with MI
+            correlations = []
+            for i, feature_name in enumerate(FEATURE_ORDER):
+                corr, p_value = spearmanr(feature_array[:, i], mi_values)
+                correlations.append({
+                    'feature': feature_name,
+                    'spearman_corr': corr,
+                    'p_value': p_value
+                })
+            
+            df_corr = pd.DataFrame(correlations)
+            df_corr.to_csv(feature_corr_file, index=False)
+            print(f"✓ Feature correlations saved: {feature_corr_file}")
+    
+    # Generate final visualization
+    visualizer.final_plot(user_id)
+    
+    print(f"\n{'='*60}")
+    print(f"SESSION SUMMARY:")
+    print(f"  Duration: {time.time() - start_time:.1f} seconds")
+    print(f"  Samples: {len(session_data)}")
+    if session_data:
+        mi_values = [d['mi'] for d in session_data]
+        print(f"  MI Range: {np.min(mi_values):.3f} - {np.max(mi_values):.3f}")
+        print(f"  MI Mean: {np.mean(mi_values):.3f} ± {np.std(mi_values):.3f}")
+    print(f"{'='*60}")
+
+def extract_mindfulness_features(eeg_window, eda_window):
+    """Extract comprehensive mindfulness features from processed windows"""
+    sf = 250
+    
+    # === ATTENTION REGULATION ===
+    theta_fz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Fz']], sf, (4, 8))
+    beta_fz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Fz']], sf, (13, 30))
+    
+    # === BODY AWARENESS ===
+    alpha_c3 = compute_bandpower(eeg_window[:, EEG_CHANNELS['C3']], sf, (8, 13))
+    alpha_c4 = compute_bandpower(eeg_window[:, EEG_CHANNELS['C4']], sf, (8, 13))
+    
+    # === EMOTION REGULATION ===
+    faa_c3c4 = np.log(alpha_c4 + 1e-8) - np.log(alpha_c3 + 1e-8)
+    
+    # === SELF-REFERENTIAL PROCESSING / DMN ===
+    alpha_pz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Pz']], sf, (8, 13))
+    
+    # === RELAXATION / VISUAL DETACHMENT ===
+    alpha_po7 = compute_bandpower(eeg_window[:, EEG_CHANNELS['PO7']], sf, (8, 13))
+    alpha_po8 = compute_bandpower(eeg_window[:, EEG_CHANNELS['PO8']], sf, (8, 13))
+    alpha_po = (alpha_po7 + alpha_po8) / 2
+    alpha_oz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Oz']], sf, (8, 13))
+    
+    # === AROUSAL/STRESS (EDA) ===
+    raw_eda = np.mean(eda_window[:, EDA_CHANNEL_INDEX])
+    # Simple EDA normalization
+    eda_norm = np.clip(10 * (raw_eda - 0) / (12 - 0), 0, 10)
+    
+    return np.array([
+        theta_fz, beta_fz, alpha_c3, alpha_c4, faa_c3c4,
+        alpha_pz, alpha_po, alpha_oz, eda_norm
+    ])
+
+if __name__ == "__main__":
+    main()
