@@ -190,31 +190,34 @@ class RobustDataProcessor:
         return processed_window
     
     def process_eda_window(self, eda_window):
-        """Process EDA window with smoothing and artifact rejection (only channel 1 is used)"""
+        """Process EDA window with smoothing and artifact rejection"""
         if len(eda_window) == 0:
             return eda_window
         
         processed_window = np.copy(eda_window)
-        ch = 1  # Only process channel 1 (EDA data)
-        if processed_window.shape[1] > ch:
-            # Apply median filter for smoothing
-            processed_window[:, ch] = self.median_filter_1d(processed_window[:, ch], self.median_filter_size)
-            # EDA-specific processing: remove sudden jumps
+        
+        # Apply median filter for smoothing
+        for ch in range(processed_window.shape[1]):
+            processed_window[:, ch] = self.median_filter_1d(
+                processed_window[:, ch], self.median_filter_size
+            )
+        
+        # EDA-specific processing: remove sudden jumps
+        for ch in range(processed_window.shape[1]):
             ch_data = processed_window[:, ch]
+            # Detect sudden changes (derivative-based)
             if len(ch_data) > 1:
                 diff = np.diff(ch_data)
                 diff_threshold = np.std(diff) * 3  # 3-sigma threshold
                 sudden_changes = np.abs(diff) > diff_threshold
-                for i in np.where(sudden_changes)[0]:
-                    # Only smooth if i+2 is within bounds
-                    if i+2 < len(ch_data):
-                        processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
-                    # If at the end, just copy previous value
-                    elif i+1 < len(ch_data):
-                        processed_window[i+1, ch] = ch_data[i]
-        # Set channel 0 to zero (or leave unchanged, as it's not used)
-        if processed_window.shape[1] > 0:
-            processed_window[:, 0] = 0
+                
+                # Smooth sudden changes
+                if np.any(sudden_changes):
+                    for i in np.where(sudden_changes)[0]:
+                        if i > 0 and i < len(ch_data) - 1:
+                            # Replace with average of neighbors
+                            processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
+        
         return processed_window
 
 # === DUAL CALIBRATION SYSTEM ===
@@ -1061,32 +1064,41 @@ class AdaptiveMICalculator:
             return obj
 
 # === LSL STREAM UTILITIES ===
-def select_lsl_stream(stream_purpose, allow_skip=False):
-    """List all available LSL streams and let the user choose which to use for EEG or EDA."""
-    print(f"\n[LSL] Scanning for available LSL streams for {stream_purpose}...")
-    streams = resolve_streams()
-
-    # Keep searching until at least one stream is found
-    while True:
-        streams = resolve_streams()
-        if streams:
-            break
-        print(f"[WARN] No LSL streams found! Make sure your device/software is streaming.")
-        input("Press Enter to retry scanning for LSL streams...")
-
-    print(f"[CHOICE] Available LSL streams:")
+def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=True):
+    """Select LSL input stream - matches stable pipeline approach"""
+    print(f"\n[LSL] Looking for {stream_type} streams...")
+    
+    if stream_type == 'EEG':
+        streams = resolve_byprop('type', 'EEG', timeout=5.0)
+    elif stream_type == 'EDA':
+        streams = resolve_byprop('type', 'EDA', timeout=5.0)
+    elif stream_type == 'UnityMarkers':
+        streams = resolve_byprop('type', 'Markers', timeout=5.0)
+    else:
+        streams = resolve_streams(timeout=5.0)
+    
+    if not streams:
+        print(f"[WARN] No {stream_type} streams found!")
+        if allow_skip:
+            return None
+        else:
+            print(f"[ERROR] {stream_type} stream is required!")
+            sys.exit(1)
+    
+    if len(streams) == 1:
+        stream = streams[0]
+        print(f"[AUTO] Using {stream_type} stream: {stream.name()}")
+        return stream
+    
+    # Multiple streams - let user choose
+    print(f"[CHOICE] Multiple {stream_type} streams found:")
     for i, stream in enumerate(streams):
-        print(f"  {i+1}. Name: {stream.name()} | Type: {stream.type()} | Channels: {stream.channel_count()}")
-
-    if allow_skip:
-        print(f"  0. [Skip] No stream for {stream_purpose}")
-
+        print(f"  {i+1}. {stream.name()} ({stream.channel_count()} channels)")
+    
     while True:
         try:
-            choice = input(f"Select stream for {stream_purpose} (1-{len(streams)}" + (", or 0 to skip" if allow_skip else "") + "): ")
+            choice = input(f"Select {stream_type} stream (1-{len(streams)}): ")
             idx = int(choice) - 1
-            if allow_skip and choice == "0":
-                return None
             if 0 <= idx < len(streams):
                 return streams[idx]
             else:
@@ -1109,11 +1121,16 @@ def setup_mindfulness_lsl_streams():
     # EMI stream (emotion-focused 0-1 range)
     emi_info = StreamInfo('emotional_mindfulness_index', 'EMI', 1, 1, 'float32', 'emi_001')
     streams['emi'] = StreamOutlet(emi_info)
+
+    # ATT stream (Attention Index, 0-1 range)
+    att_info = StreamInfo('attention_index', 'ATT', 1, 1, 'float32', 'att_001')
+    streams['att'] = StreamOutlet(att_info)
     
     print("[LSL] Output streams created:")
     print("  - mindfulness_index (Adaptive MI: 0-1, personalized)")
     print("  - raw_mindfulness_index (Raw MI: -5 to +5, universal)")
     print("  - emotional_mindfulness_index (EMI: 0-1, emotion-focused)")
+    print("  - attention_index (ATT: 0-1, attention/alertness)")
     
     return streams
 
@@ -1136,6 +1153,7 @@ class OnlineVisualizer:
         self.adaptive_mi_history = []
         self.universal_mi_history = []
         self.emi_history = []
+        self.attention_index_history = []
         self.timestamps = []
         
     def update(self, adaptive_mi, universal_mi, emi=None):
@@ -1340,64 +1358,27 @@ def main():
     print("\n[INPUT] Connecting to data streams...")
     
     # EEG stream (required)
-    print("Select LSL stream for EEG:")
-    eeg_stream = select_lsl_stream('EEG', allow_skip=False)
+    print("Select EEG stream:")
+    eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream', allow_skip=False)
     if eeg_stream is None:
         print("[ERROR] EEG stream is required. Exiting...")
         return
-
+    
     eeg_inlet = StreamInlet(eeg_stream)
-    print(f"✓ EEG stream connected: {eeg_stream.name()} (Type: {eeg_stream.type()}, Channels: {eeg_stream.channel_count()})")
-
+    print(f"✓ EEG stream connected: {eeg_stream.name()}")
+    
     # EDA stream (optional but recommended)
-    print("\n" + "="*60)
-    print("EDA STREAM SELECTION WITH VERIFICATION")
-    print("="*60)
-    print("EDA (Electrodermal Activity) provides crucial arousal/stress information.")
-    print("Please select the correct LSL stream for EDA from available options.")
-    eda_stream = select_lsl_stream('EDA', allow_skip=True)
+    print("Select EDA stream:")
+    eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals', allow_skip=True)
     if eda_stream is None:
-        print("[WARNING] No EDA stream selected. EDA features will use zero values.")
-        print("          This may reduce MI calculation accuracy.")
+        print("[WARNING] No EDA stream found. EDA features will use zero values.")
         eda_inlet = None
     else:
         eda_inlet = StreamInlet(eda_stream)
-        print(f"✓ EDA stream connected: {eda_stream.name()} (Type: {eda_stream.type()}, Channels: {eda_stream.channel_count()})")
-        # Additional verification for EDA stream
-        if eda_stream.channel_count() < 2:
-            print("[WARNING] Selected EDA stream has less than 2 channels. EDA features may not work as expected.")
-        # Optionally, test EDA stream to verify data
-        test_choice = input("\nTest EDA stream to verify data? (y/n): ").lower()
-        if test_choice == 'y':
-            print("Pulling a sample from EDA stream...")
-            try:
-                sample, _ = eda_inlet.pull_sample(timeout=2.0)
-                print(f"Sample: {sample}")
-            except Exception as e:
-                print(f"[ERROR] Could not pull sample from EDA stream: {e}")
-
+        print(f"✓ EDA stream connected: {eda_stream.name()}")
+    
     # Setup output streams
     output_streams = setup_mindfulness_lsl_streams()
-    
-    print("\n" + "="*60)
-    print("STREAM CONFIGURATION SUMMARY")
-    print("="*60)
-    print(f"✓ EEG Stream: {eeg_stream.name()}")
-    print(f"  - Type: {eeg_stream.type()}")
-    print(f"  - Channels: {eeg_stream.channel_count()}")
-    print(f"  - Source: {eeg_stream.source_id()}")
-    
-    if eda_inlet is not None:
-        print(f"✓ EDA Stream: {eda_stream.name()}")
-        print(f"  - Type: {eda_stream.type()}")
-        print(f"  - Channels: {eda_stream.channel_count()}")
-        print(f"  - Source: {eda_stream.source_id()}")
-        print(f"  - Using Channel {EDA_CHANNEL_INDEX} for EDA data")
-    else:
-        print("⚠ EDA Stream: Not connected (using zero values)")
-    
-    print("✓ Output Streams: MI, Raw MI, EMI")
-    print("="*60)
     
     print("\n[READY] All streams configured successfully!")
     
@@ -1464,282 +1445,78 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
         stop_event = threading.Event()
         
         def input_monitor():
-            while not stop_event.is_set():
-                if msvcrt.kbhit():
-                    key = msvcrt.getch().decode('utf-8').lower()
-                    if key == 'q':
-                        stop_event.set()
-                        break
-                time.sleep(0.1)
-        
+            while True:
+                if input().strip().lower() == 'q':
+                    stop_event.set()
+                    break
+
         input_thread = threading.Thread(target=input_monitor, daemon=True)
         input_thread.start()
-        
-        while not stop_event.is_set():
-            current_time = time.time()
-            
-            # Collect EEG data
-            eeg_sample, eeg_timestamp = eeg_inlet.pull_sample(timeout=0.01)
-            if eeg_sample:
-                eeg_buffer.append(eeg_sample)
-            
-            # Collect EDA data (handle missing stream gracefully)
-            if eda_inlet:
-                eda_sample, eda_timestamp = eda_inlet.pull_sample(timeout=0.01)
 
-                if eda_sample:
-                    # Ensure we have at least 2 channels for EDA: [timestamp, eda_data]
-                    if len(eda_sample) >= 2:
-                        eda_buffer.append(eda_sample[:2])
-                    else:
-                        eda_buffer.append([0, 0])  # [timestamp, eda_data]
+        while not stop_event.is_set():
+            # Collect EEG data
+            eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.01)
+            if eeg_sample is not None:
+                eeg_buffer.append(eeg_sample)
+
+            # Collect EDA data
+            if eda_inlet is not None:
+                eda_sample, _ = eda_inlet.pull_sample(timeout=0.01)
+                if eda_sample is not None:
+                    eda_buffer.append(eda_sample)
+
+            # Process data in windows
+            if len(eeg_buffer) >= window_size:
+                eeg_window = np.array(eeg_buffer[:window_size])
+                eeg_buffer = eeg_buffer[window_size:]
+
+                if eda_inlet is not None and len(eda_buffer) >= window_size:
+                    eda_window = np.array(eda_buffer[:window_size])
+                    eda_buffer = eda_buffer[window_size:]
                 else:
-                    eda_buffer.append([0, 0])  # Use zeros if no sample
-            else:
-                # Use zeros if no EDA stream (not random data)
-                eda_buffer.append([0, 0])  # [timestamp, eda_data]
-            
-            # Process when we have enough data
-            if len(eeg_buffer) >= window_size and len(eda_buffer) >= window_size:
-                # Extract windows
-                eeg_window = np.array(eeg_buffer[-window_size:])
-                eda_window = np.array(eda_buffer[-window_size:])
-                
-                # Simple processing (no complex artifact rejection to avoid incomplete methods)
-                eeg_processed = eeg_window[:, :8]  # Use first 8 EEG channels
-                eda_processed = eda_window
-                
+                    eda_window = np.zeros(window_size)
+
                 # Extract features
-                features = extract_mindfulness_features(eeg_processed, eda_processed)
-                
-                # Calculate MI using adaptive thresholds
+                features = processor.extract_features(eeg_window, eda_window)
+
+                # Calculate MI values
                 adaptive_mi, universal_mi, emi = mi_calculator.calculate_adaptive_mi(features)
-                
-                # Send to output streams
+
+                # Calculate ATT (Attention Index)
+                theta_fz = features[0]  # Attention regulation
+                att = np.clip(theta_fz / 10, 0, 1)
+
+                # Push to LSL streams
                 output_streams['mi'].push_sample([adaptive_mi])
                 output_streams['raw_mi'].push_sample([universal_mi])
                 output_streams['emi'].push_sample([emi])
-                
+                output_streams['att'].push_sample([att])
+
                 # Update visualizer
                 visualizer.update(adaptive_mi, universal_mi, emi)
-                
-                # Store session data
-                session_data.append({
-                    'mi': adaptive_mi,
-                    'raw_mi': universal_mi,
-                    'emi': emi,
-                    'timestamp': current_time,
-                    'state': 'unknown',
-                    **{f: features[i] for i, f in enumerate(FEATURE_ORDER)}
-                })
-                
+
+                # Log data
+                session_data.append([adaptive_mi, universal_mi, emi, att])
                 feature_data.append(features)
-                
-                # Display progress
-                if current_time - last_display > 1.0:  # Every second
-                    elapsed = current_time - start_time
-                    print(f"TIME: {elapsed:6.1f}s | "
-                          f"MI: {adaptive_mi:.3f} | "
-                          f"RAW: {universal_mi:.3f} | "
-                          f"EMI: {emi:.3f} | "
-                          f"THETA: {features[0]:.1f} | "
-                                                   f"ALPHA_PO: {features[6]:.1f} | "
-                          f"EDA: {features[8]:.1f}")
-                    last_display = current_time
-                
-                # Maintain buffer size
-                if len(eeg_buffer) > window_size * 2:
-                    eeg_buffer = eeg_buffer[-window_size:]
-                if len(eda_buffer) > window_size * 2:
-                    eda_buffer = eda_buffer[-window_size:]
-            
-            time.sleep(0.001)  # Small delay to prevent CPU overload
-    
+
+                # Display updates every 5 seconds
+                if time.time() - last_display > 5:
+                    print(f"Adaptive MI: {adaptive_mi:.2f}, Universal MI: {universal_mi:.2f}, EMI: {emi:.2f}, ATT: {att:.2f}")
+                    last_display = time.time()
+
+        # Save session data
+        session_df = pd.DataFrame(session_data, columns=['Adaptive MI', 'Universal MI', 'EMI', 'ATT'])
+        session_df.to_csv(session_file, index=False)
+        print(f"[SAVED] Session data saved to {session_file}")
+
+        feature_df = pd.DataFrame(feature_data, columns=FEATURE_ORDER)
+        feature_df.to_csv(feature_stats_file, index=False)
+        print(f"[SAVED] Feature stats saved to {feature_stats_file}")
+
     except KeyboardInterrupt:
-        print("\nStopping on user request...")
-    
-    print(f"\n{'='*60}")
-    print("REAL-TIME PROCESSING COMPLETE")
-    print(f"{'='*60}")
-    
-    # Save session data
-    if session_data:
-        df_session = pd.DataFrame(session_data)
-        df_session.to_csv(session_file, index=False)
-        print(f"✓ Session data saved: {session_file}")
-        
-        # Save feature statistics
-        if feature_data:
-            feature_array = np.array(feature_data)
-            feature_stats = []
-            
-            for i, feature_name in enumerate(FEATURE_ORDER):
-                stats = {
-                    'variable': feature_name,
-                    'mean': np.mean(feature_array[:, i]),
-                    'std': np.std(feature_array[:, i]),
-                    'min': np.min(feature_array[:, i]),
-                    'max': np.max(feature_array[:, i])
-                }
-                feature_stats.append(stats)
-            
-            # Add MI statistics
-            mi_values = [d['mi'] for d in session_data]
-            feature_stats.append({
-                'variable': 'mi',
-                'mean': np.mean(mi_values),
-                'std': np.std(mi_values),
-                'min': np.min(mi_values),
-                'max': np.max(mi_values)
-            })
-            
-            df_stats = pd.DataFrame(feature_stats)
-            df_stats.to_csv(feature_stats_file, index=False)
-            print(f"✓ Feature statistics saved: {feature_stats_file}")
-            
-            # Calculate feature correlations with MI
-            correlations = []
-            for i, feature_name in enumerate(FEATURE_ORDER):
-                corr, p_value = spearmanr(feature_array[:, i], mi_values)
-                correlations.append({
-                    'feature': feature_name,
-                    'spearman_corr': corr,
-                    'p_value': p_value
-                })
-            
-            df_corr = pd.DataFrame(correlations)
-            df_corr.to_csv(feature_corr_file, index=False)
-            print(f"✓ Feature correlations saved: {feature_corr_file}")
-    
-    # Generate final visualization
-    visualizer.final_plot(user_id)
-    
-    print(f"\n{'='*60}")
-    print(f"SESSION SUMMARY:")
-    print(f"  Duration: {time.time() - start_time:.1f} seconds")
-    print(f"  Samples: {len(session_data)}")
-    if session_data:
-        mi_values = [d['mi'] for d in session_data]
-        print(f"  MI Range: {np.min(mi_values):.3f} - {np.max(mi_values):.3f}")
-        print(f"  MI Mean: {np.mean(mi_values):.3f} ± {np.std(mi_values):.3f}")
-    print(f"{'='*60}")
+        print("[STOPPED] Real-time processing interrupted by user.")
 
-def extract_mindfulness_features(eeg_window, eda_window):
-    """Extract comprehensive mindfulness features from processed windows"""
-    sf = 250
-    
-    # === ATTENTION REGULATION ===
-    theta_fz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Fz']], sf, (4, 8))
-    beta_fz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Fz']], sf, (13, 30))
-    
-    # === BODY AWARENESS ===
-    alpha_c3 = compute_bandpower(eeg_window[:, EEG_CHANNELS['C3']], sf, (8, 13))
-    alpha_c4 = compute_bandpower(eeg_window[:, EEG_CHANNELS['C4']], sf, (8, 13))
-    
-    # === EMOTION REGULATION ===
-    faa_c3c4 = np.log(alpha_c4 + 1e-8) - np.log(alpha_c3 + 1e-8)
-    
-    # === SELF-REFERENTIAL PROCESSING / DMN ===
-    alpha_pz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Pz']], sf, (8, 13))
-    
-    # === RELAXATION / VISUAL DETACHMENT ===
-    alpha_po7 = compute_bandpower(eeg_window[:, EEG_CHANNELS['PO7']], sf, (8, 13))
-    alpha_po8 = compute_bandpower(eeg_window[:, EEG_CHANNELS['PO8']], sf, (8, 13))
-    alpha_po = (alpha_po7 + alpha_po8) / 2
-    alpha_oz = compute_bandpower(eeg_window[:, EEG_CHANNELS['Oz']], sf, (8, 13))
-    
-    # === AROUSAL/STRESS (EDA) ===
-    # Handle EDA data safely - always use channel 1 (actual EDA data)
-    if eda_window.shape[1] >= 2:
-        raw_eda = np.mean(eda_window[:, EDA_CHANNEL_INDEX])  # Channel 1
-        # Reduced debug output - only show occasionally
-        if hasattr(extract_mindfulness_features, 'debug_counter'):
-            extract_mindfulness_features.debug_counter += 1
-        else:
-            extract_mindfulness_features.debug_counter = 1
-        
-        # Show EDA debug info every 10 seconds (10 samples at 1Hz)
-        if extract_mindfulness_features.debug_counter % 10 == 0:
-            print(f"[DEBUG] EDA raw: {raw_eda:.3f} from channel {EDA_CHANNEL_INDEX} (sample #{extract_mindfulness_features.debug_counter})")
-    else:
-        print(f"[WARN] EDA window has {eda_window.shape[1]} channels, expected 2")
-        raw_eda = 0.0
-    
-    # Simple EDA normalization
-    eda_norm = np.clip(10 * (raw_eda - 0) / (12 - 0), 0, 10)
-    
-    return np.array([
-        theta_fz, beta_fz, alpha_c3, alpha_c4, faa_c3c4,
-        alpha_pz, alpha_po, alpha_oz, eda_norm
-    ])
+    print("[COMPLETE] Real-time processing session ended.")
 
-def test_eda_stream(eda_inlet, duration=5):
-    """Test EDA stream and show actual data being received"""
-    if eda_inlet is None:
-        print("[TEST] No EDA stream to test.")
-        return
-    
-    print(f"\n[TEST] Testing EDA stream for {duration} seconds...")
-    print("This will show you the actual data being received:")
-    
-    start_time = time.time()
-    samples_received = 0
-    sample_values = []
-    
-    while time.time() - start_time < duration:
-        sample, timestamp = eda_inlet.pull_sample(timeout=0.1)
-        if sample:
-            samples_received += 1
-            sample_values.append(sample)
-            
-            # Show first few samples with full detail
-            if samples_received <= 5:
-                print(f"  Sample {samples_received}: {sample} (channels: {len(sample)})")
-            elif samples_received == 6:
-                print("  ... (showing more samples)")
-            
-            # Show periodic updates
-            if samples_received % 50 == 0:
-                if len(sample) >= 2:
-                    ch0_val = sample[0]
-                    ch1_val = sample[1]
-                    print(f"  Sample {samples_received}: Ch0={ch0_val:.3f}, Ch1={ch1_val:.3f}")
-                else:
-                    print(f"  Sample {samples_received}: {sample}")
-    
-    print(f"\n[TEST RESULTS]")
-    print(f"  Samples received: {samples_received}")
-    print(f"  Sampling rate: ~{samples_received/duration:.1f} Hz")
-    
-    if sample_values:
-        last_sample = sample_values[-1]
-        print(f"  Channels per sample: {len(last_sample)}")
-        print(f"  Last sample: {last_sample}")
-        
-        if len(last_sample) >= 2:
-            # Show statistics for each channel
-            ch0_values = [s[0] for s in sample_values[-20:]]  # Last 20 samples
-            ch1_values = [s[1] for s in sample_values[-20:]]
-            
-            print(f"  Channel 0 (last 20): min={min(ch0_values):.3f}, max={max(ch0_values):.3f}, mean={np.mean(ch0_values):.3f}")
-            print(f"  Channel 1 (last 20): min={min(ch1_values):.3f}, max={max(ch1_values):.3f}, mean={np.mean(ch1_values):.3f}")
-            
-            print(f"\n[RECOMMENDATION]")
-            # Try to identify which channel looks like EDA
-            ch0_range = max(ch0_values) - min(ch0_values)
-            ch1_range = max(ch1_values) - min(ch1_values)
-            
-            if abs(np.mean(ch0_values)) > 1000000:  # Looks like timestamp
-                print(f"  Channel 0 appears to be TIMESTAMP (large values)")
-                print(f"  Channel 1 appears to be EDA DATA (range: {ch1_range:.3f})")
-                print(f"  → System will use Channel 1 for EDA (this is correct)")
-            elif abs(np.mean(ch1_values)) > 1000000:  # Looks like timestamp
-                print(f"  Channel 1 appears to be TIMESTAMP (large values)")
-                print(f"  Channel 0 appears to be EDA DATA (range: {ch0_range:.3f})")
-                print(f"  → WARNING: System uses Channel 1, but Channel 0 might be EDA!")
-            else:
-                print(f"  Channel 0 range: {ch0_range:.3f}")
-                print(f"  Channel 1 range: {ch1_range:.3f}")
-                print(f"  → System will use Channel 1 for EDA")
-    else:
-        print(f"  No samples received - check stream connection!")
+if __name__ == "__main__":
+    main()

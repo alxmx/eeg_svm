@@ -782,69 +782,6 @@ def calibrate_user(user_id, calibration_duration_sec=60):
     print(f"[REPORT] Calibration comparative report saved to {comp_report_path}")
     return baseline_csv, config_path
 
-# --- SVR Enhancement and Utility Functions ---
-def enhance_svr_prediction(svr_raw_pred, raw_features, scaled_features, baseline_stats=None):
-    """
-    Enhance SVR prediction with adaptive adjustments to prevent static output.
-    
-    Args:
-        svr_raw_pred: Raw SVR prediction
-        raw_features: Raw feature values (unscaled)
-        scaled_features: Scaled feature values (used by SVR)
-        baseline_stats: Optional baseline statistics for user-specific adjustments
-    
-    Returns:
-        Enhanced MI prediction (0-1 range)
-    """
-    # Basic range check and clipping
-    mi_pred = np.clip(svr_raw_pred, 0.05, 0.95)
-    
-    # If baseline stats available, apply user-specific adjustments
-    if baseline_stats is not None and 'mi_baseline' in baseline_stats:
-        baseline_mean = baseline_stats['mi_baseline']['mean']
-        baseline_std = baseline_stats['mi_baseline']['std']
-        
-        # Adjust prediction relative to user's baseline
-        if baseline_std > 0.01:  # Only adjust if there's reasonable variance
-            # Normalize relative to baseline, then remap to full range
-            z_score = (mi_pred - baseline_mean) / baseline_std
-            mi_pred = 0.5 + 0.3 * np.tanh(z_score)  # Tanh provides smooth mapping
-    
-    # Check for static output - if the same value repeats, add small perturbation
-    if hasattr(enhance_svr_prediction, 'history'):
-        enhance_svr_prediction.history.append(mi_pred)
-        # Keep last 10 predictions
-        if len(enhance_svr_prediction.history) > 10:
-            enhance_svr_prediction.history.pop(0)
-        
-        # If last 5 predictions are too similar, add adaptive noise
-        if len(enhance_svr_prediction.history) >= 5:
-            recent_std = np.std(enhance_svr_prediction.history[-5:])
-            if recent_std < 0.001:  # Very static
-                # Add small perturbation based on feature dynamics
-                feature_variance = np.std(raw_features)
-                perturbation = min(0.02, feature_variance * 0.001)
-                mi_pred += np.random.normal(0, perturbation)
-                mi_pred = np.clip(mi_pred, 0.05, 0.95)
-    else:
-        enhance_svr_prediction.history = [mi_pred]
-    
-    return float(mi_pred)
-
-def remap_raw_mi(raw_mi_value):
-    """
-    Remap raw MI value from -5 to +5 range to 0-1 range for consistency.
-    
-    Args:
-        raw_mi_value: Raw MI value (typically -5 to +5 range)
-    
-    Returns:
-        Remapped MI value (0-1 range)
-    """
-    # Simple linear mapping from [-5, 5] to [0, 1]
-    remapped = (raw_mi_value + 5.0) / 10.0
-    return np.clip(remapped, 0.0, 1.0)
-
 # --- Visualization ---
 class OnlineVisualizer:
     def __init__(self):
@@ -1138,8 +1075,6 @@ def main():
     WINDOW_SIZE = 250  # 1 second at 250 Hz
     mi_window = []  # Moving window for MI predictions
     mi_records = []  # To store MI, timestamp, and state
-    state = "unknown"  # Ensure state is defined
-
     print("Entering real-time MI prediction loop at 1 Hz. Classification every 3 seconds.")
     # --- Automatic input data analysis and adaptation ---
     # CORRECTED SCALING BASED ON REAL USER DATA ANALYSIS
@@ -1266,16 +1201,6 @@ def main():
     baseline_stats = load_user_baseline(user_id)
     has_user_calibration = baseline_stats is not None
     
-    # --- Ensure adaptive_scaler is initialized ---
-    try:
-        adaptive_scaler
-    except NameError:
-        if 'scaler' in locals():
-            adaptive_scaler = scaler
-        else:
-            adaptive_scaler = None
-    # --- Normalization and enhancement functions are defined above ---
-    
     if has_user_calibration:
         print(f"[INFO] Loaded user baseline statistics for {user_id}")
         print(f"[INFO] Baseline MI: mean={baseline_stats['mi_baseline']['mean']:.3f}, std={baseline_stats['mi_baseline']['std']:.3f}")
@@ -1382,22 +1307,9 @@ def main():
         print(f"[DEBUG] EDA raw window stats: Ch0 mean={np.mean(eda_win[:,0]):.1f}, Ch1 mean={np.mean(eda_win[:,1]):.1f}")
         
         features = [theta_fz, alpha_po, faa, beta_frontal, eda_norm]
-        # --- Normalize features for MI and SVR ---
-        # Use the same scaler as calibration for SVR, and robust quantile for universal MI
         sample = np.array(features).reshape(1, -1)
-        # Print features before scaling
-        print(f"[REAL-TIME] Features (raw): {dict(zip(FEATURE_ORDER, features))}")
-        # Scale for SVR
-        if 'adaptive_scaler' in locals():
-            x_scaled = adaptive_scaler.transform(sample)
-        else:
-            x_scaled = scaler.transform(sample)
-        print(f"[REAL-TIME] Features (scaled for SVR): {x_scaled[0]}")
-        # Robust quantile normalization for universal MI
-        norm_features_dict = normalize_features_flexible(dict(zip(FEATURE_ORDER, features)), method='robust_quantile')
-        norm_features = [norm_features_dict[f] for f in FEATURE_ORDER]
-        print(f"[REAL-TIME] Features (robust quantile norm): {norm_features}")
         # --- Print features and MI values in real-time ---
+        print(f"[REAL-TIME] Features: {dict(zip(FEATURE_ORDER, features))}")
         # Warn if features are all zeros, all NaN, or constant
         if np.all(np.isnan(sample)):
             print("[WARN] All features are NaN. Skipping MI prediction for this window.")
@@ -1412,26 +1324,94 @@ def main():
             mi_pred = 0.0
             skipped_reason = 'constant'
         else:
-            # --- SVR MI prediction ---
-            svr_raw_pred = svr.predict(x_scaled)[0]
-            # Enhanced SVR prediction with adaptive adjustments
-            mi_pred = enhance_svr_prediction(svr_raw_pred, sample[0], x_scaled[0], baseline_stats)
-            # Fallback: If enhancement returns None or static, use universal MI
-            if mi_pred is None or np.isnan(mi_pred):
-                print("[WARN] Enhanced SVR MI is None/NaN. Using universal MI fallback.")
-                mi_pred = calculate_mi_universal(norm_features, method='robust_quantile')
-            # Additional safety: If MI is static for several windows, force fallback
-            if hasattr(enhance_svr_prediction, 'last_output'):
-                if abs(mi_pred - enhance_svr_prediction.last_output) < 1e-6:
-                    print(f"[WARN] Output still static! Using universal MI fallback.")
-                    mi_pred = calculate_mi_universal(norm_features, method='robust_quantile')
-            enhance_svr_prediction.last_output = mi_pred
-            # --- Universal MI, raw MI, EMI ---
-            mi_universal = calculate_mi_universal(norm_features, method='robust_quantile')
-            raw_mi_value = calculate_raw_mi_universal(norm_features, method='robust_quantile')
-            emi_value = calculate_emi_universal(norm_features, method='robust_quantile')
-            raw_mi_remapped = remap_raw_mi(raw_mi_value)
-            print(f"[REAL-TIME] MI (SVR): {mi_pred:.3f} | MI (Universal): {mi_universal:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f}")
+            x_scaled = scaler.transform(sample)
+            if np.isnan(x_scaled).any():
+                print("[WARN] Feature vector contains NaN. Skipping MI prediction for this window.")
+                mi_pred = 0.0
+                skipped_reason = 'scaled_nan'
+            else:
+                mi_pred = svr.predict(x_scaled)[0]
+                skipped_reason = None
+                
+                # Add detailed debug info for near-zero MI values
+                if mi_pred < 0.0001:
+                    print("\n[DEBUG] Near-zero MI value detected!")
+                    print(f"[DEBUG] Raw features: {sample[0]}")
+                    print(f"[DEBUG] Scaled features: {x_scaled[0]}")
+                    recalc_mi = calculate_mi_scaled(sample[0])  # Use scaled version for comparison
+                    print(f"[DEBUG] Direct MI calculation (scaled): {recalc_mi}, Model prediction: {mi_pred}")
+                    print(f"[DEBUG] Difference: {abs(recalc_mi - mi_pred):.6f}")
+                    if abs(recalc_mi - mi_pred) > 0.1:
+                        print("[DEBUG] Large difference between direct calculation and model! Check model training.")
+                    print("")
+        
+        # --- Real-time MI output ---
+        if skipped_reason:
+            # Set default state for skipped predictions
+            state = "skipped"
+            print(f"MI: {mi_pred:.4f} (prediction skipped: {skipped_reason})")
+        elif has_user_calibration:
+            # Calibrated user: Just output the continuous MI value
+            print(f"MI: {mi_pred:.4f}")
+            state = "continuous"  # No discrete classification for calibrated users
+        else:
+            # Non-calibrated user: Try SVC classification if available
+            if global_svc is not None:
+                try:
+                    svc_state_idx = global_svc.predict(x_scaled)[0]
+                    svc_state = {2: "Focused", 1: "Neutral", 0: "Unfocused"}.get(svc_state_idx, str(svc_state_idx))
+                    print(f"MI: {mi_pred:.3f} | SVC State: {svc_state}")
+                    state = svc_state
+                except Exception as e:
+                    print(f"[WARN] SVC prediction failed: {e}. Using threshold classification.")
+                    # Fallback to threshold-based classification
+                    if mi_pred >= 0.5:
+                        state = "Focused"
+                    elif mi_pred >= 0.37:
+                        state = "Neutral"
+                    else:
+                        state = "Unfocused"
+                    print(f"MI: {mi_pred:.3f} | State: {state} (threshold-based)")
+            else:
+                # No SVC available - use threshold classification
+                if mi_pred >= 0.5:
+                    state = "Focused"
+                elif mi_pred >= 0.37:
+                    state = "Neutral"
+                else:
+                    state = "Unfocused"
+                print(f"MI: {mi_pred:.3f} | State: {state} (threshold-based)")
+        
+        # Show how current features compare to baseline
+        if baseline_stats is not None:
+            print(f"[BASELINE COMPARISON]")
+            for feat_name, feat_val in zip(FEATURE_ORDER, features):
+                baseline_mean = baseline_stats['means'][feat_name]
+                baseline_std = baseline_stats['stds'][feat_name]
+                if baseline_std > 0:
+                    z_score = (feat_val - baseline_mean) / baseline_std
+                    comparison = "HIGH" if z_score > 1.5 else "LOW" if z_score < -1.5 else "NORMAL"
+                    print(f"  {feat_name}: {comparison} (z={z_score:.2f})")
+            print(f"  Current MI vs Baseline: {mi_pred:.3f} vs {baseline_stats['mi_baseline']['mean']:.3f}")
+            print("")
+        
+        mi_buffer.append(mi_pred)
+        if skipped_reason:
+            if 'mi_skipped_count' not in locals():
+                mi_skipped_count = {}
+            mi_skipped_count[skipped_reason] = mi_skipped_count.get(skipped_reason, 0) + 1
+            
+        # Calculate additional indices for more dynamic feedback using universal methods
+        raw_mi_value = calculate_raw_mi_universal(sample[0], method='robust_quantile')
+        emi_value = calculate_emi_universal(sample[0], method='robust_quantile')
+        # Remap raw MI to 0-1 range for output
+        raw_mi_remapped = remap_raw_mi(raw_mi_value)
+        
+        # Also calculate universal MI for comparison (this is the generalizable approach)
+        mi_universal = calculate_mi_universal(sample[0], method='robust_quantile')
+        
+        # --- Print all MI values with universal comparison ---
+        print(f"[REAL-TIME] MI (SVR): {mi_pred:.3f} | MI (Universal): {mi_universal:.3f} | Raw MI: {raw_mi_value:.3f} (remapped: {raw_mi_remapped:.3f}) | EMI: {emi_value:.3f}")
         
         # OPTION: Use universal MI instead of user-specific SVR if model is saturated
         if abs(mi_pred - 0.984) < 0.001:  # Detect saturation (like user 007_alex_test)
@@ -1697,8 +1677,41 @@ def check_required_resources():
             print(f"[OK] File: {f}")
     print("")
 
-# --- Missing Function Definitions ---
+# --- Analysis and Visualization (separate section, not part of the pipeline) ---
+"""
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+# Load a session's feature CSV (e.g., baseline or MI session)
+df = pd.read_csv('user_configs/your_user_baseline.csv')  # or logs/your_user_mi_session_*.csv
+
+# Plot each feature over time
+feature_names = ['theta_fz', 'alpha_po', 'faa', 'beta_frontal', 'eda_norm']
+titles = [
+    'Attentional Engagement (theta_fz)',
+    'Alpha Power (alpha_po)',
+    'Frontal Alpha Asymmetry (FAA)',
+    'Beta Power (beta_frontal)',
+    'Normalized EDA (eda_norm)'
+]
+plt.figure(figsize=(15, 10))
+for i, (feat, title) in enumerate(zip(feature_names, titles), 1):
+    plt.subplot(5, 1, i)
+    plt.plot(df[feat])
+    plt.title(title)
+    plt.xlabel('Window')
+    plt.ylabel(feat)
+plt.tight_layout()
+plt.savefig('feature_time_series.png')
+print("Feature time series plot saved to feature_time_series.png")
+# Optional: Pairplot/correlations
+sns.pairplot(df[feature_names])
+plt.savefig('feature_pairplot.png')
+print("Feature pairplot saved to feature_pairplot.png")
+"""
+
+# --- Flexible Normalization Function ---
 def normalize_features_flexible(features, method='robust_quantile', user_stats=None, pop_stats=None):
     """
     Flexible feature normalization supporting robust quantile, physiological, z-score (with min std), and hybrid/adaptive.
@@ -1710,9 +1723,7 @@ def normalize_features_flexible(features, method='robust_quantile', user_stats=N
         feature_dict = dict(zip(FEATURE_ORDER, features))
     else:
         feature_dict = features.copy()
-    
     normalized = {}
-    
     # Population-level robust quantiles and physiological ranges - UPDATED based on real data
     robust_ranges = {
         'theta_fz': (2, 60),      # Updated from (1, 50) - real data shows range ~1-158
@@ -1721,7 +1732,6 @@ def normalize_features_flexible(features, method='robust_quantile', user_stats=N
         'beta_frontal': (2, 35),  # Updated from (1, 50) - real data shows range ~1-33
         'eda_norm': (2, 12)       # Updated from (0.1, 20) - real data shows range ~3-11
     }
-    
     physio_ranges = {
         'theta_fz': (0.5, 120),   # Updated from (0.1, 100) - accommodate higher theta values
         'alpha_po': (0.5, 50),    # Updated from (0.1, 100) - more realistic alpha range
@@ -1729,9 +1739,7 @@ def normalize_features_flexible(features, method='robust_quantile', user_stats=N
         'beta_frontal': (0.5, 60), # Updated from (0.1, 100) - more realistic beta range  
         'eda_norm': (1, 15)       # Updated from (0.01, 50) - more realistic EDA range
     }
-    
     min_std = 1.0  # Minimum std for z-score
-    
     for feat_name, value in feature_dict.items():
         if method == 'robust_quantile':
             q5, q95 = robust_ranges[feat_name]
@@ -1779,11 +1787,10 @@ def normalize_features_flexible(features, method='robust_quantile', user_stats=N
             q5, q95 = robust_ranges[feat_name]
             val = 10 * (value - q5) / (q95 - q5)
             normalized[feat_name] = np.clip(val, 0, 10)
-    
     return normalized
 
+# --- Update universal MI/EMI to use flexible normalization ---
 def calculate_mi_universal(features, method='robust_quantile', user_stats=None, pop_stats=None):
-    """Universal MI calculation using flexible normalization"""
     normalized_features = normalize_features_flexible(features, method=method, user_stats=user_stats, pop_stats=pop_stats)
     feature_array = np.array([
         normalized_features['theta_fz'],
@@ -1803,7 +1810,6 @@ def calculate_mi_universal(features, method='robust_quantile', user_stats=None, 
     return np.clip(mi, 0.1, 0.9)
 
 def calculate_raw_mi_universal(features, method='robust_quantile', user_stats=None, pop_stats=None):
-    """Calculate raw MI with more interpretable range"""
     normalized_features = normalize_features_flexible(features, method=method, user_stats=user_stats, pop_stats=pop_stats)
     feature_array = np.array([
         normalized_features['theta_fz'],
@@ -1821,7 +1827,6 @@ def calculate_raw_mi_universal(features, method='robust_quantile', user_stats=No
     return np.clip(raw_mi, -5, 5)
 
 def calculate_emi_universal(features, method='robust_quantile', user_stats=None, pop_stats=None):
-    """Calculate Emotional Mindfulness Index using flexible normalization"""
     normalized_features = normalize_features_flexible(features, method=method, user_stats=user_stats, pop_stats=pop_stats)
     feature_array = np.array([
         normalized_features['theta_fz'],
@@ -1839,6 +1844,52 @@ def calculate_emi_universal(features, method='robust_quantile', user_stats=None,
     centered_sum = weighted_sum - 4.0  # Center around expected emotional baseline
     emi = 1 / (1 + np.exp(-centered_sum * 0.8))  # Gentler sigmoid slope
     return np.clip(emi, 0.05, 0.95)  # Avoid extreme values
+
+def classify_mindfulness_state(mi_value, method='adaptive_thresholds'):
+    """
+    Classify mindfulness state with improved thresholds based on the new MI range (0.1-0.9).
+    """
+    if method == 'adaptive_thresholds':
+        # Thresholds optimized for 0.1-0.9 MI range
+        if mi_value < 0.35:
+            return 'Unfocused'
+        elif mi_value < 0.65:
+            return 'Neutral'  
+        else:
+            return 'Focused'
+    elif method == 'strict_thresholds':
+        # More strict thresholds requiring higher MI for 'Focused'
+        if mi_value < 0.3:
+            return 'Unfocused'
+        elif mi_value < 0.7:
+            return 'Neutral'
+        else:
+            return 'Focused'
+    else:
+        # Original conservative thresholds
+        if mi_value < 0.4:
+            return 'Unfocused'
+        elif mi_value < 0.6:
+            return 'Neutral'
+        else:
+            return 'Focused'
+
+# --- Confirm required files and folders at startup ---
+REQUIRED_DIRS = [MODEL_DIR, LOG_DIR, VIS_DIR, PROCESSED_DATA_DIR, USER_CONFIG_DIR]
+REQUIRED_FILES = [MODEL_PATH, SCALER_PATH]
+def check_required_resources():
+    print("\n[CHECK] Confirming required directories and files...")
+    for d in REQUIRED_DIRS:
+        if not os.path.exists(d):
+            print(f"[MISSING] Directory not found: {d}")
+        else:
+            print(f"[OK] Directory: {d}")
+    for f in REQUIRED_FILES:
+        if not os.path.exists(f):
+            print(f"[MISSING] File not found: {f}")
+        else:
+            print(f"[OK] File: {f}")
+    print("")
 
 # --- Analysis and Visualization (separate section, not part of the pipeline) ---
 """
@@ -1874,5 +1925,136 @@ plt.savefig('feature_pairplot.png')
 print("Feature pairplot saved to feature_pairplot.png")
 """
 
-if __name__ == "__main__":
-    main()
+# --- Flexible Normalization Function ---
+def normalize_features_flexible(features, method='robust_quantile', user_stats=None, pop_stats=None):
+    """
+    Flexible feature normalization supporting robust quantile, physiological, z-score (with min std), and hybrid/adaptive.
+    - method: 'robust_quantile', 'physiological', 'zscore', 'hybrid'
+    - user_stats: dict with 'means' and 'stds' (optional, for zscore/hybrid)
+    - pop_stats: dict with 'means', 'stds', 'q5', 'q95', 'physio_min', 'physio_max' (optional, for hybrid)
+    """
+    if isinstance(features, (list, np.ndarray)):
+        feature_dict = dict(zip(FEATURE_ORDER, features))
+    else:
+        feature_dict = features.copy()
+    normalized = {}
+    # Population-level robust quantiles and physiological ranges - UPDATED based on real data
+    robust_ranges = {
+        'theta_fz': (2, 60),      # Updated from (1, 50) - real data shows range ~1-158
+        'alpha_po': (1, 30),      # Updated from (1, 50) - real data shows range ~1-40  
+        'faa': (-2.5, 2.5),       # Updated from (-2, 2) - real data shows range ~-3 to +4
+        'beta_frontal': (2, 35),  # Updated from (1, 50) - real data shows range ~1-33
+        'eda_norm': (2, 12)       # Updated from (0.1, 20) - real data shows range ~3-11
+    }
+    physio_ranges = {
+        'theta_fz': (0.5, 120),   # Updated from (0.1, 100) - accommodate higher theta values
+        'alpha_po': (0.5, 50),    # Updated from (0.1, 100) - more realistic alpha range
+        'faa': (-3.5, 3.5),       # Updated from (-3, 3) - accommodate FAA extremes
+        'beta_frontal': (0.5, 60), # Updated from (0.1, 100) - more realistic beta range  
+        'eda_norm': (1, 15)       # Updated from (0.01, 50) - more realistic EDA range
+    }
+    min_std = 1.0  # Minimum std for z-score
+    for feat_name, value in feature_dict.items():
+        if method == 'robust_quantile':
+            q5, q95 = robust_ranges[feat_name]
+            val = 10 * (value - q5) / (q95 - q5)
+            normalized[feat_name] = np.clip(val, 0, 10)
+        elif method == 'physiological':
+            min_val, max_val = physio_ranges[feat_name]
+            clipped_val = np.clip(value, min_val * 0.1, max_val * 2)
+            val = 10 * (clipped_val - min_val) / (max_val - min_val)
+            normalized[feat_name] = np.clip(val, 0, 10)
+        elif method == 'zscore':
+            # Use user_stats if available, else pop_stats
+            if user_stats and 'means' in user_stats and 'stds' in user_stats:
+                mean = user_stats['means'].get(feat_name, 0)
+                std = max(user_stats['stds'].get(feat_name, min_std), min_std)
+            elif pop_stats and 'means' in pop_stats and 'stds' in pop_stats:
+                mean = pop_stats['means'].get(feat_name, 0)
+                std = max(pop_stats['stds'].get(feat_name, min_std), min_std)
+            else:
+                mean, std = 0, min_std
+            z = (value - mean) / std
+            # Map z-score to [0, 10] using a sigmoid-like mapping
+            mapped = 10 / (1 + np.exp(-z))
+            normalized[feat_name] = np.clip(mapped, 0, 10)
+        elif method == 'hybrid':
+            # Try user/session stats, else robust quantile, else physiological
+            if user_stats and 'means' in user_stats and 'stds' in user_stats:
+                mean = user_stats['means'].get(feat_name, 0)
+                std = max(user_stats['stds'].get(feat_name, min_std), min_std)
+                z = (value - mean) / std
+                mapped = 10 / (1 + np.exp(-z))
+                normalized[feat_name] = np.clip(mapped, 0, 10)
+            elif pop_stats and 'q5' in pop_stats and 'q95' in pop_stats:
+                q5 = pop_stats['q5'].get(feat_name, robust_ranges[feat_name][0])
+                q95 = pop_stats['q95'].get(feat_name, robust_ranges[feat_name][1])
+                val = 10 * (value - q5) / (q95 - q5)
+                normalized[feat_name] = np.clip(val, 0, 10)
+            else:
+                min_val, max_val = physio_ranges[feat_name]
+                clipped_val = np.clip(value, min_val * 0.1, max_val * 2)
+                val = 10 * (clipped_val - min_val) / (max_val - min_val)
+                normalized[feat_name] = np.clip(val, 0, 10)
+        else:
+            # Default to robust quantile
+            q5, q95 = robust_ranges[feat_name]
+            val = 10 * (value - q5) / (q95 - q5)
+            normalized[feat_name] = np.clip(val, 0, 10)
+    return normalized
+
+# --- Update universal MI/EMI to use flexible normalization ---
+def calculate_mi_universal(features, method='robust_quantile', user_stats=None, pop_stats=None):
+    normalized_features = normalize_features_flexible(features, method=method, user_stats=user_stats, pop_stats=pop_stats)
+    feature_array = np.array([
+        normalized_features['theta_fz'],
+        normalized_features['alpha_po'],
+        normalized_features['faa'],
+        normalized_features['beta_frontal'],
+        normalized_features['eda_norm']
+    ])
+    weights = np.array([0.3, 0.3, 0.2, -0.1, -0.2])
+    weighted_sum = np.dot(feature_array, weights)
+    
+    # IMPROVED MAPPING: More linear and sensitive range mapping
+    # Expected weighted_sum range: roughly 0-10 (from normalized features 0-10)
+    # Map to MI range 0.1-0.9 for better sensitivity and avoid saturation
+    raw_score = weighted_sum / 10.0  # Normalize to 0-1
+    mi = 0.1 + 0.8 * raw_score  # Map to 0.1-0.9 range
+    return np.clip(mi, 0.1, 0.9)
+
+def calculate_raw_mi_universal(features, method='robust_quantile', user_stats=None, pop_stats=None):
+    normalized_features = normalize_features_flexible(features, method=method, user_stats=user_stats, pop_stats=pop_stats)
+    feature_array = np.array([
+        normalized_features['theta_fz'],
+        normalized_features['alpha_po'],
+        normalized_features['faa'],
+        normalized_features['beta_frontal'],
+        normalized_features['eda_norm']
+    ])
+    weights = np.array([0.3, 0.3, 0.2, -0.1, -0.2])
+    weighted_sum = np.dot(feature_array, weights)
+    
+    # IMPROVED RAW MI: More interpretable range
+    # Convert to -5 to +5 range for better interpretation
+    raw_mi = (weighted_sum - 5.0) * 2.0  # Center around 0, expand range
+    return np.clip(raw_mi, -5, 5)
+
+def calculate_emi_universal(features, method='robust_quantile', user_stats=None, pop_stats=None):
+    normalized_features = normalize_features_flexible(features, method=method, user_stats=user_stats, pop_stats=pop_stats)
+    feature_array = np.array([
+        normalized_features['theta_fz'],
+        normalized_features['alpha_po'],
+        normalized_features['faa'],
+        normalized_features['beta_frontal'],
+        normalized_features['eda_norm']
+    ])
+    # EMI emphasizes emotional features (FAA and EDA)
+    weights = np.array([0.15, 0.15, 0.4, -0.05, -0.25])
+    weighted_sum = np.dot(feature_array, weights)
+    
+    # IMPROVED EMI MAPPING: More sensitive to emotional states
+    # Apply gentle sigmoid with better center point and scaling
+    centered_sum = weighted_sum - 4.0  # Center around expected emotional baseline
+    emi = 1 / (1 + np.exp(-centered_sum * 0.8))  # Gentler sigmoid slope
+    return np.clip(emi, 0.05, 0.95)  # Avoid extreme values
