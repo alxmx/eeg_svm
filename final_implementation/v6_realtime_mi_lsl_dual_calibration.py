@@ -1064,47 +1064,40 @@ class AdaptiveMICalculator:
             return obj
 
 # === LSL STREAM UTILITIES ===
-def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=True):
-    """Select LSL input stream - matches stable pipeline approach"""
-    print(f"\n[LSL] Looking for {stream_type} streams...")
-
-    if stream_type == 'EEG':
-        streams = resolve_byprop('type', 'EEG', timeout=5.0)
-    elif stream_type == 'EDA':
-        streams = resolve_byprop('type', 'EDA', timeout=5.0)
-    elif stream_type == 'UnityMarkers':
-        streams = resolve_byprop('type', 'Markers', timeout=5.0)
-    else:
-        streams = resolve_streams(timeout=5.0)
-
+def select_lsl_stream(stream_type, name_hint=None, allow_skip=False):
+    from pylsl import resolve_streams
+    print(f"Searching for available LSL streams of type '{stream_type}'...")
+    streams = resolve_streams()
     if not streams:
-        print(f"[WARN] No {stream_type} streams found!")
         if allow_skip:
-            return None
+            print(f"No LSL streams found for type '{stream_type}'. You may skip this sensor.")
+            skip = input(f"Type 'skip' to continue without {stream_type}, or press Enter to retry: ").strip().lower()
+            if skip == 'skip':
+                return None
+            else:
+                return select_lsl_stream(stream_type, name_hint, allow_skip)
         else:
-            print(f"[ERROR] {stream_type} stream is required!")
-            sys.exit(1)
-
-    if len(streams) == 1:
-        stream = streams[0]
-        print(f"[AUTO] Using {stream_type} stream: {stream.name()}")
-        return stream
-
-    # Multiple streams - let user choose
-    print(f"[CHOICE] Multiple {stream_type} streams found:")
-    for i, stream in enumerate(streams):
-        print(f"  {i+1}. {stream.name()} ({stream.channel_count()} channels)")
-
+            raise RuntimeError("No LSL streams found on the network.")
+    print("Available streams:")
+    for idx, s in enumerate(streams):
+        print(f"[{idx}] Name: {s.name()} | Type: {s.type()} | Channels: {s.channel_count()} | Source ID: {s.source_id()}")
+    if allow_skip:
+        print(f"[{len(streams)}] SKIP this sensor and use generic model/scaler")
     while True:
         try:
-            choice = input(f"Select {stream_type} stream (1-{len(streams)}): ")
-            idx = int(choice) - 1
-            if 0 <= idx < len(streams):
-                return streams[idx]
+            sel = input(f"Select the stream index for {stream_type}: ")
+            if allow_skip and sel.strip() == str(len(streams)):
+                print(f"[SKIP] Skipping {stream_type} stream selection. Will use generic model/scaler.")
+                return None
+            sel = int(sel)
+            if 0 <= sel < len(streams):
+                chosen = streams[sel]
+                print(f"[CONFIRM] Selected stream: Name='{chosen.name()}', Type='{chosen.type()}', Channels={chosen.channel_count()}, Source ID='{chosen.source_id()}'\n")
+                return chosen
             else:
-                print("Invalid choice. Please try again.")
+                print(f"Invalid index. Please enter a number between 0 and {len(streams)-1} (or {len(streams)} to skip if available).")
         except ValueError:
-            print("Please enter a number.")
+            print("Invalid input. Please enter a valid integer index.")
 
 # Update EDA stream selection to avoid timeout issues
 print("Select EDA stream:")
