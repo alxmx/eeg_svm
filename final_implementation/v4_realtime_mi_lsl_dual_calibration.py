@@ -214,9 +214,12 @@ class RobustDataProcessor:
                 # Smooth sudden changes
                 if np.any(sudden_changes):
                     for i in np.where(sudden_changes)[0]:
-                        if i > 0 and i < len(ch_data) - 1:
+                        if i > 0 and i < len(ch_data) - 2:  # Ensure i+2 is valid
                             # Replace with average of neighbors
                             processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
+                        elif i == len(ch_data) - 2:  # Last possible sudden change
+                            # Use average of previous sample and current
+                            processed_window[i+1, ch] = (ch_data[i] + ch_data[i+1]) / 2
         
         return processed_window
 
