@@ -701,7 +701,12 @@ def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=Tru
     print(f"\nResolving {stream_type} streams...")
     
     # Resolve all streams and filter by type
-    all_streams = resolve_streams(timeout=5.0)
+    try:
+        all_streams = resolve_streams(wait_time=5.0)
+    except:
+        # Fallback to no timeout parameter
+        all_streams = resolve_streams()
+    
     streams = [s for s in all_streams if s.type() == stream_type]
     
     if not streams:
