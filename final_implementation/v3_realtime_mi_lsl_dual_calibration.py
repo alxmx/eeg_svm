@@ -22,9 +22,10 @@ import numpy as np
 import pandas as pd
 import time
 import os
+import sys
 import json
 from datetime import datetime
-from pylsl import StreamInlet, StreamOutlet, StreamInfo, resolve_streams
+from pylsl import StreamInlet, StreamOutlet, StreamInfo, resolve_streams, resolve_byprop
 from scipy.signal import welch, butter, filtfilt
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
@@ -1251,47 +1252,46 @@ class AdaptiveMICalculator:
 
 # === LSL STREAM UTILITIES ===
 def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=True):
-    """Select an LSL stream with user confirmation"""
-    print(f"\nResolving {stream_type} streams...")
+    """Select LSL input stream - matches stable pipeline approach"""
+    print(f"\n[LSL] Looking for {stream_type} streams...")
     
-    # Resolve all streams and filter by type
-    try:
-        all_streams = resolve_streams(wait_time=5.0)
-    except:
-        # Fallback to no timeout parameter
-        all_streams = resolve_streams()
-    
-    streams = [s for s in all_streams if s.type() == stream_type]
+    if stream_type == 'EEG':
+        streams = resolve_byprop('type', 'EEG', timeout=5.0)
+    elif stream_type == 'EDA':
+        streams = resolve_byprop('type', 'EDA', timeout=5.0)
+    elif stream_type == 'UnityMarkers':
+        streams = resolve_byprop('type', 'Markers', timeout=5.0)
+    else:
+        streams = resolve_streams(timeout=5.0)
     
     if not streams:
-        print(f"No {stream_type} streams found.")
+        print(f"[WARN] No {stream_type} streams found!")
         if allow_skip:
             return None
         else:
-            input("Please start your LSL stream and press Enter to retry...")
-            return select_lsl_stream(stream_type, name_hint, allow_skip, confirm)
+            print(f"[ERROR] {stream_type} stream is required!")
+            sys.exit(1)
     
     if len(streams) == 1:
         stream = streams[0]
-        if confirm:
-            print(f"Found {stream_type} stream: {stream.name()} ({stream.channel_count()} channels)")
-            if input("Use this stream? (y/n): ").lower() != 'y':
-                return None
+        print(f"[AUTO] Using {stream_type} stream: {stream.name()}")
         return stream
     
     # Multiple streams - let user choose
-    print(f"Found {len(streams)} {stream_type} streams:")
+    print(f"[CHOICE] Multiple {stream_type} streams found:")
     for i, stream in enumerate(streams):
         print(f"  {i+1}. {stream.name()} ({stream.channel_count()} channels)")
     
     while True:
         try:
-            choice = int(input("Select stream number: ")) - 1
-            if 0 <= choice < len(streams):
-                return streams[choice]
+            choice = input(f"Select {stream_type} stream (1-{len(streams)}): ")
+            idx = int(choice) - 1
+            if 0 <= idx < len(streams):
+                return streams[idx]
+            else:
+                print("Invalid choice. Please try again.")
         except ValueError:
-            pass
-        print("Invalid choice. Please try again.")
+            print("Please enter a number.")
 
 def setup_mindfulness_lsl_streams():
     """Setup output LSL streams for MI data"""
@@ -1536,20 +1536,27 @@ def main():
     print(f"\n[SETUP] Initializing session for user: {user_id}")
     
     # Setup LSL streams
-    print("\n[LSL] Setting up data streams...")
-    eeg_stream = select_lsl_stream('EEG', name_hint='EEG')
+    print("\n[INPUT] Connecting to data streams...")
+    
+    # EEG stream (required)
+    print("Select EEG stream:")
+    eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream', allow_skip=False)
     if eeg_stream is None:
-        print("[ERROR] No EEG stream selected. Exiting...")
+        print("[ERROR] EEG stream is required. Exiting...")
         return
     
-    eda_stream = select_lsl_stream('EDA', name_hint='EDA', allow_skip=True)
+    eeg_inlet = StreamInlet(eeg_stream)
+    print(f"✓ EEG stream connected: {eeg_stream.name()}")
+    
+    # EDA stream (optional but recommended)
+    print("Select EDA stream:")
+    eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals', allow_skip=True)
     if eda_stream is None:
-        print("[WARNING] No EDA stream found. Using simulated EDA data...")
+        print("[WARNING] No EDA stream found. EDA features will use zero values.")
         eda_inlet = None
     else:
         eda_inlet = StreamInlet(eda_stream)
-    
-    eeg_inlet = StreamInlet(eeg_stream)
+        print(f"✓ EDA stream connected: {eda_stream.name()}")
     
     # Setup output streams
     output_streams = setup_mindfulness_lsl_streams()
