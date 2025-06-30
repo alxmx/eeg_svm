@@ -1064,41 +1064,32 @@ class AdaptiveMICalculator:
             return obj
 
 # === LSL STREAM UTILITIES ===
-def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=True):
-    """Select LSL input stream with simple, robust selection logic from stable version"""
-    print(f"\n[LSL] Looking for {stream_type} streams...")
-    
-    if stream_type == 'EEG':
-        streams = resolve_byprop('type', 'EEG', timeout=5.0)
-    elif stream_type == 'EDA':
-        streams = resolve_byprop('type', 'EDA', timeout=5.0)
-    elif stream_type == 'UnityMarkers':
-        streams = resolve_byprop('type', 'Markers', timeout=5.0)
-    else:
-        streams = resolve_streams(timeout=5.0)
-    
+def select_lsl_stream(stream_purpose, allow_skip=False):
+    """List all available LSL streams and let the user choose which to use for EEG or EDA."""
+    print(f"\n[LSL] Scanning for available LSL streams for {stream_purpose}...")
+    streams = resolve_streams(timeout=5.0)
+
     if not streams:
-        print(f"[WARN] No {stream_type} streams found!")
+        print(f"[WARN] No LSL streams found!")
         if allow_skip:
             return None
         else:
-            print(f"[ERROR] {stream_type} stream is required!")
+            print(f"[ERROR] {stream_purpose} stream is required!")
             sys.exit(1)
-    
-    if len(streams) == 1:
-        stream = streams[0]
-        print(f"[AUTO] Using {stream_type} stream: {stream.name()}")
-        return stream
-    
-    # Multiple streams - let user choose
-    print(f"[CHOICE] Multiple {stream_type} streams found:")
+
+    print(f"[CHOICE] Available LSL streams:")
     for i, stream in enumerate(streams):
-        print(f"  {i+1}. {stream.name()} ({stream.channel_count()} channels)")
-    
+        print(f"  {i+1}. Name: {stream.name()} | Type: {stream.type()} | Channels: {stream.channel_count()}")
+
+    if allow_skip:
+        print(f"  0. [Skip] No stream for {stream_purpose}")
+
     while True:
         try:
-            choice = input(f"Select {stream_type} stream (1-{len(streams)}): ")
+            choice = input(f"Select stream for {stream_purpose} (1-{len(streams)}" + (", or 0 to skip" if allow_skip else "") + "): ")
             idx = int(choice) - 1
+            if allow_skip and choice == "0":
+                return None
             if 0 <= idx < len(streams):
                 return streams[idx]
             else:
@@ -1352,43 +1343,42 @@ def main():
     print("\n[INPUT] Connecting to data streams...")
     
     # EEG stream (required)
-    print("Select EEG stream:")
-    eeg_stream = select_lsl_stream('EEG', name_hint='UnicornRecorderLSLStream', allow_skip=False)
+    print("Select LSL stream for EEG:")
+    eeg_stream = select_lsl_stream('EEG', allow_skip=False)
     if eeg_stream is None:
         print("[ERROR] EEG stream is required. Exiting...")
         return
-    
+
     eeg_inlet = StreamInlet(eeg_stream)
-    print(f"✓ EEG stream connected: {eeg_stream.name()}")
-    
-    # EDA stream (optional but recommended) - Always show verification
+    print(f"✓ EEG stream connected: {eeg_stream.name()} (Type: {eeg_stream.type()}, Channels: {eeg_stream.channel_count()})")
+
+    # EDA stream (optional but recommended)
     print("\n" + "="*60)
     print("EDA STREAM SELECTION WITH VERIFICATION")
     print("="*60)
     print("EDA (Electrodermal Activity) provides crucial arousal/stress information.")
-    print("Please carefully select the correct EDA stream from available options.")
-    eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals', allow_skip=True, confirm=True)
+    print("Please select the correct LSL stream for EDA from available options.")
+    eda_stream = select_lsl_stream('EDA', allow_skip=True)
     if eda_stream is None:
         print("[WARNING] No EDA stream selected. EDA features will use zero values.")
         print("          This may reduce MI calculation accuracy.")
         eda_inlet = None
     else:
         eda_inlet = StreamInlet(eda_stream)
-        print(f"✓ EDA stream connected: {eda_stream.name()}")
-        print(f"  Channels: {eda_stream.channel_count()}")
-        print(f"  Type: {eda_stream.type()}")
-        
+        print(f"✓ EDA stream connected: {eda_stream.name()} (Type: {eda_stream.type()}, Channels: {eda_stream.channel_count()})")
         # Additional verification for EDA stream
-        if eda_stream.channel_count() != 2:
-            print(f"[INFO] EDA stream has {eda_stream.channel_count()} channels.")
-            print("       System expects 2 channels (timestamp + EDA signal).")
-            print("       Will use channel 1 for EDA data.")
-        
-        # Test EDA stream to verify data
+        if eda_stream.channel_count() < 2:
+            print("[WARNING] Selected EDA stream has less than 2 channels. EDA features may not work as expected.")
+        # Optionally, test EDA stream to verify data
         test_choice = input("\nTest EDA stream to verify data? (y/n): ").lower()
         if test_choice == 'y':
-            test_eda_stream(eda_inlet)
-    
+            print("Pulling a sample from EDA stream...")
+            try:
+                sample, _ = eda_inlet.pull_sample(timeout=2.0)
+                print(f"Sample: {sample}")
+            except Exception as e:
+                print(f"[ERROR] Could not pull sample from EDA stream: {e}")
+
     # Setup output streams
     output_streams = setup_mindfulness_lsl_streams()
     
@@ -1556,7 +1546,7 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
                           f"RAW: {universal_mi:.3f} | "
                           f"EMI: {emi:.3f} | "
                           f"THETA: {features[0]:.1f} | "
-                          f"ALPHA_PO: {features[6]:.1f} | "
+                                                   f"ALPHA_PO: {features[6]:.1f} | "
                           f"EDA: {features[8]:.1f}")
                     last_display = current_time
                 
@@ -1756,6 +1746,3 @@ def test_eda_stream(eda_inlet, duration=5):
                 print(f"  → System will use Channel 1 for EDA")
     else:
         print(f"  No samples received - check stream connection!")
-
-if __name__ == "__main__":
-    main()
