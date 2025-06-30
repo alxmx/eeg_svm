@@ -1065,122 +1065,46 @@ class AdaptiveMICalculator:
 
 # === LSL STREAM UTILITIES ===
 def select_lsl_stream(stream_type, name_hint=None, allow_skip=False, confirm=True):
-    """Select LSL input stream with user verification for all streams"""
+    """Select LSL input stream with simple, robust selection logic from stable version"""
     print(f"\n[LSL] Looking for {stream_type} streams...")
     
-    # Special handling for EDA - always show all available streams for user verification
-    if stream_type == 'EDA':
-        print("[INFO] Searching for ALL available LSL streams to ensure correct EDA selection...")
-        streams = resolve_streams(timeout=10.0)  # Longer timeout for EDA
-        
-        if not streams:
-            print(f"[WARN] No LSL streams found at all!")
-            if allow_skip:
-                print("[INFO] EDA stream is optional. Continuing without EDA data.")
-                return None
-            else:
-                print(f"[ERROR] No streams available!")
-                sys.exit(1)
-        
-        # Filter and show all streams with detailed info
-        print(f"[AVAILABLE] Found {len(streams)} LSL streams:")
-        eda_candidates = []
-        other_streams = []
-        
-        for i, stream in enumerate(streams):
-            stream_info = f"  {i+1}. {stream.name()} | Type: {stream.type()} | Channels: {stream.channel_count()} | Source: {stream.source_id()}"
-            print(stream_info)
-            
-            # Identify potential EDA streams
-            if (stream.type().lower() in ['eda', 'gsr', 'biosignals'] or 
-                'eda' in stream.name().lower() or 
-                'gsr' in stream.name().lower() or
-                'opensignals' in stream.name().lower() or
-                'biosignals' in stream.name().lower()):
-                eda_candidates.append((i, stream))
-            else:
-                other_streams.append((i, stream))
-        
-        if eda_candidates:
-            print(f"\n[CANDIDATES] Potential EDA streams detected:")
-            for idx, stream in eda_candidates:
-                print(f"  → {idx+1}. {stream.name()} (Type: {stream.type()}, Channels: {stream.channel_count()})")
-        
-        print(f"\n[IMPORTANT] Please verify which stream contains EDA data:")
-        print("  - EDA streams typically have 2 channels (timestamp + EDA signal)")
-        print("  - Look for names containing: EDA, GSR, OpenSignals, biosignals")
-        print("  - If unsure, you can skip EDA (option 0)")
-        
-        while True:
-            try:
-                choice = input(f"\nSelect stream (1-{len(streams)}) or 0 to skip EDA: ")
-                if choice == '0':
-                    if allow_skip:
-                        print("[SKIP] Continuing without EDA stream.")
-                        return None
-                    else:
-                        print("[ERROR] EDA stream cannot be skipped.")
-                        continue
-                
-                idx = int(choice) - 1
-                if 0 <= idx < len(streams):
-                    selected_stream = streams[idx]
-                    print(f"[SELECTED] EDA Stream: {selected_stream.name()}")
-                    print(f"  Type: {selected_stream.type()}")
-                    print(f"  Channels: {selected_stream.channel_count()}")
-                    print(f"  Source: {selected_stream.source_id()}")
-                    
-                    # Verify channel count for EDA
-                    if selected_stream.channel_count() < 2:
-                        print(f"[WARNING] Selected stream has {selected_stream.channel_count()} channels.")
-                        print("EDA streams typically need 2 channels (timestamp + signal).")
-                        confirm = input("Continue with this stream? (y/n): ").lower()
-                        if confirm != 'y':
-                            continue
-                    
-                    return selected_stream
-                else:
-                    print("Invalid choice. Please try again.")
-            except ValueError:
-                print("Please enter a number.")
-    
-    # Standard handling for EEG and other stream types
+    if stream_type == 'EEG':
+        streams = resolve_byprop('type', 'EEG', timeout=5.0)
+    elif stream_type == 'EDA':
+        streams = resolve_byprop('type', 'EDA', timeout=5.0)
+    elif stream_type == 'UnityMarkers':
+        streams = resolve_byprop('type', 'Markers', timeout=5.0)
     else:
-        if stream_type == 'EEG':
-            streams = resolve_byprop('type', 'EEG', timeout=5.0)
-        elif stream_type == 'UnityMarkers':
-            streams = resolve_byprop('type', 'Markers', timeout=5.0)
+        streams = resolve_streams(timeout=5.0)
+    
+    if not streams:
+        print(f"[WARN] No {stream_type} streams found!")
+        if allow_skip:
+            return None
         else:
-            streams = resolve_streams(timeout=5.0)
-        
-        if not streams:
-            print(f"[WARN] No {stream_type} streams found!")
-            if allow_skip:
-                return None
+            print(f"[ERROR] {stream_type} stream is required!")
+            sys.exit(1)
+    
+    if len(streams) == 1:
+        stream = streams[0]
+        print(f"[AUTO] Using {stream_type} stream: {stream.name()}")
+        return stream
+    
+    # Multiple streams - let user choose
+    print(f"[CHOICE] Multiple {stream_type} streams found:")
+    for i, stream in enumerate(streams):
+        print(f"  {i+1}. {stream.name()} ({stream.channel_count()} channels)")
+    
+    while True:
+        try:
+            choice = input(f"Select {stream_type} stream (1-{len(streams)}): ")
+            idx = int(choice) - 1
+            if 0 <= idx < len(streams):
+                return streams[idx]
             else:
-                print(f"[ERROR] {stream_type} stream is required!")
-                sys.exit(1)
-        
-        if len(streams) == 1 and not confirm:
-            stream = streams[0]
-            print(f"[AUTO] Using {stream_type} stream: {stream.name()}")
-            return stream
-        
-        # Multiple streams or user verification requested - let user choose
-        print(f"[CHOICE] {stream_type} streams found:")
-        for i, stream in enumerate(streams):
-            print(f"  {i+1}. {stream.name()} ({stream.channel_count()} channels)")
-        
-        while True:
-            try:
-                choice = input(f"Select {stream_type} stream (1-{len(streams)}): ")
-                idx = int(choice) - 1
-                if 0 <= idx < len(streams):
-                    return streams[idx]
-                else:
-                    print("Invalid choice. Please try again.")
-            except ValueError:
-                print("Please enter a number.")
+                print("Invalid choice. Please try again.")
+        except ValueError:
+            print("Please enter a number.")
 
 def setup_mindfulness_lsl_streams():
     """Setup output LSL streams for MI data"""
