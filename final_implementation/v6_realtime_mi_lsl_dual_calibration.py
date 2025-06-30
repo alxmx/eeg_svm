@@ -1099,16 +1099,6 @@ def select_lsl_stream(stream_type, name_hint=None, allow_skip=False):
         except ValueError:
             print("Invalid input. Please enter a valid integer index.")
 
-# Update EDA stream selection to avoid timeout issues
-print("Select EDA stream:")
-eda_stream = select_lsl_stream('EDA', name_hint='OpenSignals', allow_skip=False)
-if eda_stream is None:
-    print("[ERROR] EDA stream is required. Exiting...")
-    sys.exit(1)
-else:
-    eda_inlet = StreamInlet(eda_stream)
-    print(f"✓ EDA stream connected: {eda_stream.name()}")
-
 def setup_mindfulness_lsl_streams():
     """Setup output LSL streams for MI data"""
     streams = {}
