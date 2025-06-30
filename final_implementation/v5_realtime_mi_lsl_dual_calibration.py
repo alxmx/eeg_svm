@@ -1067,15 +1067,15 @@ class AdaptiveMICalculator:
 def select_lsl_stream(stream_purpose, allow_skip=False):
     """List all available LSL streams and let the user choose which to use for EEG or EDA."""
     print(f"\n[LSL] Scanning for available LSL streams for {stream_purpose}...")
-    streams = resolve_streams(timeout=5.0)
+    streams = resolve_streams()
 
-    if not streams:
-        print(f"[WARN] No LSL streams found!")
-        if allow_skip:
-            return None
-        else:
-            print(f"[ERROR] {stream_purpose} stream is required!")
-            sys.exit(1)
+    # Keep searching until at least one stream is found
+    while True:
+        streams = resolve_streams()
+        if streams:
+            break
+        print(f"[WARN] No LSL streams found! Make sure your device/software is streaming.")
+        input("Press Enter to retry scanning for LSL streams...")
 
     print(f"[CHOICE] Available LSL streams:")
     for i, stream in enumerate(streams):
@@ -1746,6 +1746,3 @@ def test_eda_stream(eda_inlet, duration=5):
                 print(f"  → System will use Channel 1 for EDA")
     else:
         print(f"  No samples received - check stream connection!")
-
-if __name__ == "__main__":
-    main()
