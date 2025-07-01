@@ -642,21 +642,48 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
     print("="*80)
     print("Press 'q' + Enter to stop transmission...\n")
     
+    # Debug counters
+    eeg_sample_count = 0
+    eda_sample_count = 0
+    loop_count = 0
+    last_debug_time = time.time()
+    
+    print(f"🔍 DEBUG: Starting data collection loop...")
+    print(f"   EEG inlet: {eeg_inlet is not None}")
+    print(f"   EDA inlet: {eda_inlet is not None}")
+    print(f"   Window size: {window_size} samples")
+    
     try:
         while not stop_event.is_set():
+            loop_count += 1
+            
             # Collect EEG
             eeg_sample, _ = eeg_inlet.pull_sample(timeout=0.01)
             if eeg_sample is not None:
                 eeg_buffer.append(eeg_sample[:8])
+                eeg_sample_count += 1
             
             # Collect EDA
             if eda_inlet is not None:
                 eda_sample, _ = eda_inlet.pull_sample(timeout=0.01)
                 if eda_sample is not None:
                     eda_buffer.append(eda_sample[:2])
+                    eda_sample_count += 1
+            
+            # Debug info every 5 seconds
+            if time.time() - last_debug_time > 5:
+                print(f"\n🔍 DEBUG [{time.time() - start_time:.1f}s]:")
+                print(f"   Loop iterations: {loop_count}")
+                print(f"   EEG samples collected: {eeg_sample_count} (buffer: {len(eeg_buffer)})")
+                print(f"   EDA samples collected: {eda_sample_count} (buffer: {len(eda_buffer)})")
+                print(f"   Need {window_size} samples for processing...")
+                last_debug_time = time.time()
+                loop_count = 0
             
             # Process when window is full
             if len(eeg_buffer) >= window_size:
+                print(f"\n🎯 PROCESSING window at {time.time() - start_time:.1f}s...")
+                
                 eeg_window = np.array(eeg_buffer[:window_size])
                 eeg_buffer = eeg_buffer[window_size:]
                 
@@ -665,22 +692,32 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
                     eda_buffer = eda_buffer[window_size:]
                 else:
                     eda_window = np.zeros((window_size, 2))
+                    if eda_inlet is not None:
+                        print(f"⚠️  EDA buffer insufficient: {len(eda_buffer)}/{window_size}")
+                
+                print(f"   EEG window shape: {eeg_window.shape}")
+                print(f"   EDA window shape: {eda_window.shape}")
                 
                 # Extract features
                 features = processor.extract_features(eeg_window, eda_window)
+                print(f"   Features extracted: {features.shape}")
+                print(f"   Feature values: {features[:3]}...")  # Show first 3 features
                 
                 # Calculate MI values
                 adaptive_mi, universal_mi, emi = mi_calculator.calculate_adaptive_mi(features)
+                print(f"   MI calculated: adaptive={adaptive_mi:.3f}, universal={universal_mi:.3f}, emi={emi:.3f}")
                 
                 # Calculate ATT (Attention Index)
                 theta_fz = features[0]
                 att = np.clip(theta_fz / 50, 0, 1)  # Normalize theta for attention
+                print(f"   ATT calculated: {att:.3f} (from theta_fz={theta_fz:.3f})")
                 
                 # Push to LSL streams
                 output_streams['mi'].push_sample([adaptive_mi])
                 output_streams['raw_mi'].push_sample([universal_mi])
                 output_streams['emi'].push_sample([emi])
                 output_streams['att'].push_sample([att])
+                print(f"   ✅ LSL samples pushed successfully!")
                 
                 # Log data
                 session_data.append([adaptive_mi, universal_mi, emi, att])
@@ -769,6 +806,30 @@ def main():
     mi_calculator = AdaptiveMICalculator(adaptive_thresholds, user_id)
     
     print("\n[READY] Starting real-time processing...")
+    
+    # Verify streams are still active
+    print("🔍 Verifying LSL streams before real-time processing...")
+    try:
+        # Test EEG stream
+        test_eeg, _ = eeg_inlet.pull_sample(timeout=1.0)
+        if test_eeg is not None:
+            print(f"   ✅ EEG stream active: {len(test_eeg)} channels")
+        else:
+            print(f"   ⚠️  EEG stream: no data received in 1 second")
+        
+        # Test EDA stream
+        if eda_inlet is not None:
+            test_eda, _ = eda_inlet.pull_sample(timeout=1.0)
+            if test_eda is not None:
+                print(f"   ✅ EDA stream active: {len(test_eda)} channels")
+            else:
+                print(f"   ⚠️  EDA stream: no data received in 1 second")
+        else:
+            print(f"   ℹ️  EDA stream: not connected (optional)")
+            
+    except Exception as e:
+        print(f"   ❌ Stream verification error: {e}")
+    
     input("Press Enter to continue (or 'q' to quit): ")
     
     # Real-time processing
