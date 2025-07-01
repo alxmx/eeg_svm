@@ -1409,7 +1409,7 @@ class DualCalibrationSystem:
             return int(obj)
         elif isinstance(obj, (np.float64, np.float32, np.float16)):
             return float(obj)
-               else:
+        else:
             return obj
 
 # === ADAPTIVE MI CALCULATOR ===
