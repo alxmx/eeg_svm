@@ -2235,3 +2235,6 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
         print("[STOPPED] Real-time processing interrupted by user.")
 
     print("[COMPLETE] Real-time processing session ended.")
+
+if __name__ == "__main__":
+    main()
