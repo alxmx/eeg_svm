@@ -278,43 +278,56 @@ class DualCalibrationSystem:
         return np.array(features_list) if features_list else None
     
     def calculate_mi_universal(self, features):
-        """Universal MI calculation"""
+        """Universal MI calculation with realistic ranges based on actual data"""
         weights = np.array([
-            0.35, -0.08, 0.14, 0.14, 0.10,  # theta_fz, beta_fz, alpha_c3, alpha_c4, faa_c3c4
-            -0.20, 0.22, 0.15, -0.10        # alpha_pz, alpha_po, alpha_oz, eda_norm
+            0.20, -0.05, 0.12, 0.12, 0.15,  # theta_fz, beta_fz, alpha_c3, alpha_c4, faa_c3c4
+            -0.15, 0.15, 0.12, -0.08        # alpha_pz, alpha_po, alpha_oz, eda_norm
         ])
         
-        # Normalize features to 0-10 range
+        # Updated ranges based on actual session data analysis
         ranges = {
-            'theta_fz': (1, 80), 'beta_fz': (0.5, 15), 'alpha_c3': (2, 30),
-            'alpha_c4': (2, 30), 'faa_c3c4': (-2.5, 2.5), 'alpha_pz': (2, 35),
-            'alpha_po': (1, 25), 'alpha_oz': (2, 25), 'eda_norm': (0, 12)
+            'theta_fz': (5000, 200000),      # Real range: 21-257435, use 5K-200K
+            'beta_fz': (5000, 80000),        # Real range: 20-114651, use 5K-80K  
+            'alpha_c3': (20000, 1200000),    # Real range: 22-1319565, use 20K-1.2M
+            'alpha_c4': (25000, 2000000),    # Real range: 27-2554539, use 25K-2M
+            'faa_c3c4': (-0.5, 1.5),         # Real range: 0.15-1.42, use wider range
+            'alpha_pz': (30000, 3000000),    # Real range: 29-3823299, use 30K-3M
+            'alpha_po': (30000, 2000000),    # Real range: 29-2210734, use 30K-2M
+            'alpha_oz': (15000, 1500000),    # Real range: 15-1797776, use 15K-1.5M
+            'eda_norm': (1.5, 2.01)         # Real range: 1.5-2.01, very narrow!
         }
         
         normalized = []
         for i, (feat_name, (q5, q95)) in enumerate(ranges.items()):
-            val = 10 * (features[i] - q5) / (q95 - q5)
-            normalized.append(np.clip(val, 0, 10))
+            # More gentle normalization to preserve variance
+            val = (features[i] - q5) / (q95 - q5)
+            normalized.append(np.clip(val, 0, 1))  # 0-1 range instead of 0-10
         
         normalized_features = np.array(normalized)
         
-        # Calculate weighted sum with adaptive centering
+        # Calculate weighted sum with less aggressive centering
         weighted_sum = np.dot(normalized_features, weights)
+        
+        # More gentle adaptive centering based on EDA and overall activity
         eda_norm = normalized_features[8]
-        alpha_norm = np.mean(normalized_features[2:8])  # alpha channels
+        eeg_activity = np.mean(normalized_features[:8])  # Average EEG activity
         
-        if eda_norm > 7:
-            center_shift = -1.8
-        elif alpha_norm > 6:
-            center_shift = -1.0
+        if eda_norm > 0.8:  # High EDA relative to its narrow range
+            center_shift = -0.3
+        elif eeg_activity > 0.7:  # High overall EEG activity
+            center_shift = 0.1
         else:
-            center_shift = -1.5
-        
+            center_shift = -0.1  # Default slight negative shift
+            
         centered_sum = weighted_sum + center_shift
-        mi_sigmoid = 1 / (1 + np.exp(-2.5 * centered_sum))
-        mi = 0.1 + 0.8 * mi_sigmoid
         
-        return np.clip(mi, 0.1, 0.9)
+        # More sensitive sigmoid with better dynamic range
+        mi_sigmoid = 1 / (1 + np.exp(-8 * centered_sum))  # Increased sensitivity
+        
+        # Map to full 0-1 range with better distribution
+        mi = mi_sigmoid
+        
+        return np.clip(mi, 0.0, 1.0)
     
     def compute_adaptive_thresholds(self):
         """Compute personalized adaptive thresholds"""
@@ -423,58 +436,76 @@ class AdaptiveMICalculator:
         return smoothed_mi, universal_mi, emi
     
     def calculate_mi_universal(self, features):
-        """Universal MI calculation (same as calibration)"""
+        """Universal MI calculation (same as calibration) with realistic ranges"""
         weights = np.array([
-            0.35, -0.08, 0.14, 0.14, 0.10,
-            -0.20, 0.22, 0.15, -0.10
+            0.20, -0.05, 0.12, 0.12, 0.15,  # theta_fz, beta_fz, alpha_c3, alpha_c4, faa_c3c4
+            -0.15, 0.15, 0.12, -0.08        # alpha_pz, alpha_po, alpha_oz, eda_norm
         ])
         
+        # Updated ranges based on actual session data analysis
         ranges = {
-            'theta_fz': (1, 80), 'beta_fz': (0.5, 15), 'alpha_c3': (2, 30),
-            'alpha_c4': (2, 30), 'faa_c3c4': (-2.5, 2.5), 'alpha_pz': (2, 35),
-            'alpha_po': (1, 25), 'alpha_oz': (2, 25), 'eda_norm': (0, 12)
+            'theta_fz': (5000, 200000),      # Real range: 21-257435, use 5K-200K
+            'beta_fz': (5000, 80000),        # Real range: 20-114651, use 5K-80K  
+            'alpha_c3': (20000, 1200000),    # Real range: 22-1319565, use 20K-1.2M
+            'alpha_c4': (25000, 2000000),    # Real range: 27-2554539, use 25K-2M
+            'faa_c3c4': (-0.5, 1.5),         # Real range: 0.15-1.42, use wider range
+            'alpha_pz': (30000, 3000000),    # Real range: 29-3823299, use 30K-3M
+            'alpha_po': (30000, 2000000),    # Real range: 29-2210734, use 30K-2M
+            'alpha_oz': (15000, 1500000),    # Real range: 15-1797776, use 15K-1.5M
+            'eda_norm': (1.96, 2.01)         # Real range: 1.96-2.01, very narrow!
         }
         
         normalized = []
         for i, (feat_name, (q5, q95)) in enumerate(ranges.items()):
-            val = 10 * (features[i] - q5) / (q95 - q5)
-            normalized.append(np.clip(val, 0, 10))
+            # More gentle normalization to preserve variance
+            val = (features[i] - q5) / (q95 - q5)
+            normalized.append(np.clip(val, 0, 1))  # 0-1 range instead of 0-10
         
         normalized_features = np.array(normalized)
+        
+        # Calculate weighted sum with less aggressive centering
         weighted_sum = np.dot(normalized_features, weights)
         
+        # More gentle adaptive centering based on EDA and overall activity
         eda_norm = normalized_features[8]
-        alpha_norm = np.mean(normalized_features[2:8])
+        eeg_activity = np.mean(normalized_features[:8])  # Average EEG activity
         
-        if eda_norm > 7:
-            center_shift = -1.8
-        elif alpha_norm > 6:
-            center_shift = -1.0
+        if eda_norm > 0.8:  # High EDA relative to its narrow range
+            center_shift = -0.3
+        elif eeg_activity > 0.7:  # High overall EEG activity
+            center_shift = 0.1
         else:
-            center_shift = -1.5
-        
+            center_shift = -0.1  # Default slight negative shift
+            
         centered_sum = weighted_sum + center_shift
-        mi_sigmoid = 1 / (1 + np.exp(-2.5 * centered_sum))
-        mi = 0.1 + 0.8 * mi_sigmoid
         
-        return np.clip(mi, 0.1, 0.9)
+        # More sensitive sigmoid with better dynamic range
+        mi_sigmoid = 1 / (1 + np.exp(-8 * centered_sum))  # Increased sensitivity
+        
+        # Map to full 0-1 range with better distribution
+        mi = mi_sigmoid
+        
+        return np.clip(mi, 0.0, 1.0)
     
     def calculate_emi(self, features, universal_mi):
-        """Calculate Emotional Mindfulness Index"""
-        theta_fz = features[0]
-        beta_fz = features[1]
-        faa_c3c4 = features[4]
-        eda_norm = features[8]
+        """Calculate Emotional Mindfulness Index with improved dynamic range"""
+        # Normalize features using the same realistic ranges
+        theta_fz_norm = np.clip((features[0] - 5000) / (200000 - 5000), 0, 1)
+        beta_fz_norm = np.clip((features[1] - 5000) / (80000 - 5000), 0, 1)
+        faa_c3c4_norm = np.clip((features[4] + 0.5) / (1.5 + 0.5), 0, 1)  # Shifted to 0-1
+        eda_norm = np.clip((features[8] - 1.96) / (2.01 - 1.96), 0, 1)
         
-        emotion_score = (
-            0.3 * (theta_fz / 10) +
-            0.2 * (1 - beta_fz / 10) +
-            0.3 * np.tanh(abs(faa_c3c4)) +
-            0.2 * (1 - eda_norm / 10)
-        )
+        # EMI components with better balance
+        attention_component = theta_fz_norm * 0.25
+        relaxation_component = (1 - beta_fz_norm) * 0.20  # Lower beta = more relaxed
+        emotion_balance = (0.5 + faa_c3c4_norm * 0.5) * 0.25  # FAA contribution
+        arousal_component = (1 - eda_norm) * 0.20  # Lower arousal = better
+        mindfulness_component = universal_mi * 0.10  # Small contribution from universal MI
         
-        emi = 0.7 * universal_mi + 0.3 * emotion_score
-        return np.clip(emi, 0, 1)
+        # Combined EMI score
+        emi = attention_component + relaxation_component + emotion_balance + arousal_component + mindfulness_component
+        
+        return np.clip(emi, 0.0, 1.0)
 
 # === LSL UTILITIES ===
 def select_lsl_stream(stream_type, allow_skip=False):
@@ -707,10 +738,11 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
                 adaptive_mi, universal_mi, emi = mi_calculator.calculate_adaptive_mi(features)
                 print(f"   MI calculated: adaptive={adaptive_mi:.3f}, universal={universal_mi:.3f}, emi={emi:.3f}")
                 
-                # Calculate ATT (Attention Index)
+                # Calculate ATT (Attention Index) with realistic theta ranges
                 theta_fz = features[0]
-                att = np.clip(theta_fz / 50, 0, 1)  # Normalize theta for attention
-                print(f"   ATT calculated: {att:.3f} (from theta_fz={theta_fz:.3f})")
+                # Normalize theta using realistic range: 5K-200K from actual data
+                att = np.clip((theta_fz - 5000) / (200000 - 5000), 0, 1)
+                print(f"   ATT calculated: {att:.3f} (from theta_fz={theta_fz:.1f}, normalized from 5K-200K range)")
                 
                 # Push to LSL streams
                 output_streams['mi'].push_sample([adaptive_mi])
