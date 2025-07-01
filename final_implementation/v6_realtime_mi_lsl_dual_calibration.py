@@ -195,29 +195,30 @@ class RobustDataProcessor:
             return eda_window
         
         processed_window = np.copy(eda_window)
-        
         # Apply median filter for smoothing
         for ch in range(processed_window.shape[1]):
             processed_window[:, ch] = self.median_filter_1d(
                 processed_window[:, ch], self.median_filter_size
             )
-        
-        # EDA-specific processing: remove sudden jumps
+        # EDA-specific processing: remove sudden jumps (vectorized for efficiency)
         for ch in range(processed_window.shape[1]):
             ch_data = processed_window[:, ch]
-            # Detect sudden changes (derivative-based)
             if len(ch_data) > 1:
                 diff = np.diff(ch_data)
                 diff_threshold = np.std(diff) * 3  # 3-sigma threshold
                 sudden_changes = np.abs(diff) > diff_threshold
-                
-                # Smooth sudden changes
                 if np.any(sudden_changes):
-                    for i in np.where(sudden_changes)[0]:
-                        if i > 0 and i < len(ch_data) - 1:
-                            # Replace with average of neighbors
-                            processed_window[i+1, ch] = (ch_data[i] + ch_data[i+2]) / 2
-        
+                    idx = np.where(sudden_changes)[0]
+                    # Vectorized: indices where i > 0 and i+2 < len(ch_data)
+                    valid = (idx > 0) & (idx + 2 < len(ch_data))
+                    idx_valid = idx[valid]
+                    if idx_valid.size > 0:
+                        processed_window[idx_valid + 1, ch] = (ch_data[idx_valid] + ch_data[idx_valid + 2]) / 2
+                    # Vectorized: indices at the end (i+1 < len(ch_data) but i+2 >= len(ch_data))
+                    end = (idx + 1 < len(ch_data)) & (idx + 2 >= len(ch_data))
+                    idx_end = idx[end]
+                    if idx_end.size > 0:
+                        processed_window[idx_end + 1, ch] = ch_data[idx_end]
         return processed_window
 
 # === DUAL CALIBRATION SYSTEM ===
