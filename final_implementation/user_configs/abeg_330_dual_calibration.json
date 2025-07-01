@@ -1,0 +1,16 @@
+{
+  "relaxed_baseline": {
+    "mi_mean": 0.04336368649591839,
+    "mi_std": 0.0
+  },
+  "focused_baseline": {
+    "mi_mean": 0.19366832985525018,
+    "mi_std": 0.0
+  },
+  "adaptive_mapping": {
+    "low_threshold": 0.04336368649591839,
+    "high_threshold": 0.19366832985525018,
+    "dynamic_range": 0.1503046433593318,
+    "calibration_time": "2025-07-01 03:32:58.704292"
+  }
+}
