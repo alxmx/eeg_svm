@@ -278,25 +278,22 @@ class DualCalibrationSystem:
         print(f"\n⏳ Collecting data for {phase} baseline...")
     
     def collect_calibration_data(self, eeg_inlet, eda_inlet, duration_sec, phase_name):
-        """Collect calibration data with robust processing"""
+        """Collect calibration data with robust processing, ensuring real-time duration."""
         print(f"\n[CALIBRATION] Starting {phase_name} phase data collection...")
-        
         features_list = []
-        n_samples = int(250 * duration_sec)
         window_size = 250  # 1 second windows
-        
         eeg_samples, eda_samples = [], []
-        
-        print(f"Collecting {n_samples} samples at 250 Hz for {duration_sec} seconds...")
+        print(f"Collecting samples at 250 Hz for {duration_sec} seconds...")
         print("Progress: ", end="", flush=True)
-        
         start_time = time.time()
-        
-        for i in range(n_samples):
-            # Progress indicator
-            if i % (n_samples // 20) == 0:
-                print("█", end="", flush=True)
-            
+        last_window_time = start_time
+        n_windows = int(duration_sec)  # Expect 1 window per second
+        progress_bar_len = 20
+        progress_update_interval = duration_sec / progress_bar_len
+        next_progress_time = start_time + progress_update_interval
+        window_counter = 0
+        while (time.time() - start_time) < duration_sec:
+            loop_start = time.time()
             # Collect EEG sample
             if eeg_inlet is not None:
                 eeg_sample, _ = eeg_inlet.pull_sample(timeout=1.0)
@@ -305,12 +302,11 @@ class DualCalibrationSystem:
                     eeg_samples.append(eeg)
                 else:
                     if len(eeg_samples) > 0:
-                        eeg_samples.append(eeg_samples[-1])  # Use last valid sample
+                        eeg_samples.append(eeg_samples[-1])
                     else:
                         eeg_samples.append(np.zeros(8))
             else:
                 eeg_samples.append(np.zeros(8))
-            
             # Collect EDA sample
             if eda_inlet is not None:
                 eda_sample, _ = eda_inlet.pull_sample(timeout=1.0)
@@ -319,38 +315,36 @@ class DualCalibrationSystem:
                     eda_samples.append(eda)
                 else:
                     if len(eda_samples) > 0:
-                        eda_samples.append(eda_samples[-1])  # Use last valid sample
+                        eda_samples.append(eda_samples[-1])
                     else:
                         eda_samples.append(np.zeros(2))
             else:
                 eda_samples.append(np.zeros(2))
-            
             # Extract features every second (250 samples)
             if len(eeg_samples) >= window_size and len(eeg_samples) % window_size == 0:
-                # Get the last window_size samples
                 eeg_window = np.array(eeg_samples[-window_size:])
                 eda_window = np.array(eda_samples[-window_size:])
-                
-                # Apply robust processing
                 eeg_processed = self.data_processor.process_eeg_window(eeg_window)
                 eda_processed = self.data_processor.process_eda_window(eda_window)
-                
-                # Extract features
                 features = self.extract_features(eeg_processed, eda_processed)
-                
                 if not np.any(np.isnan(features)):
                     features_list.append(features)
-        
+                window_counter += 1
+                # Progress bar update
+                if (time.time() >= next_progress_time) or (window_counter == n_windows):
+                    print("█", end="", flush=True)
+                    next_progress_time += progress_update_interval
+            # Maintain 250 Hz sampling rate
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, (1.0/250) - elapsed)
+            time.sleep(sleep_time)
         print(f" ✓ Complete!")
-        
         actual_duration = time.time() - start_time
         print(f"[CALIBRATION] {phase_name} phase: collected {len(features_list)} feature windows")
         print(f"[CALIBRATION] Actual duration: {actual_duration:.1f} seconds")
-        
         if len(features_list) == 0:
             print(f"[ERROR] No valid features collected for {phase_name} phase!")
             return None
-        
         return np.array(features_list)
     
     def extract_features(self, eeg_window, eda_window):
@@ -779,7 +773,8 @@ class AdaptiveMICalculator:
         # Calculate weighted sum
         weighted_sum = np.dot(normalized_features, weights)
         
-        # Improved dynamic range mapping with adaptive centering (same as calibration)
+        # Improved dynamic range mapping with adaptive centering
+        # Use feature-based centering for better dynamic range
         eda_norm = normalized_features[8]
         theta_norm = normalized_features[0]
         alpha_norm = (normalized_features[2] + normalized_features[3] + 
@@ -966,7 +961,8 @@ class AdaptiveMICalculator:
         # Calculate weighted sum
         weighted_sum = np.dot(normalized_features, weights)
         
-        # Improved dynamic range mapping with adaptive centering (same as calibration)
+        # Improved dynamic range mapping with adaptive centering
+        # Use feature-based centering for better dynamic range
         eda_norm = normalized_features[8]
         theta_norm = normalized_features[0]
         alpha_norm = (normalized_features[2] + normalized_features[3] + 
