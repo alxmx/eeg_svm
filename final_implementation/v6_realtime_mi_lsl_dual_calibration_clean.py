@@ -632,6 +632,15 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
     input_thread.start()
     
     print("Collecting data...")
+    print("\n" + "="*80)
+    print("📡 REAL-TIME LSL TRANSMISSION VALUES")
+    print("="*80)
+    print("  MI   = Adaptive Mindfulness Index (0-1, personalized)")
+    print("  Raw  = Universal Mindfulness Index (0-1, standard)")
+    print("  EMI  = Emotional Mindfulness Index (0-1, emotion-focused)")
+    print("  ATT  = Attention Index (0-1, theta-based alertness)")
+    print("="*80)
+    print("Press 'q' + Enter to stop transmission...\n")
     
     try:
         while not stop_event.is_set():
@@ -676,13 +685,39 @@ def run_realtime_processing(user_id, eeg_inlet, eda_inlet, output_streams, mi_ca
                 # Log data
                 session_data.append([adaptive_mi, universal_mi, emi, att])
                 
-                # Display every 5 seconds
-                if time.time() - last_display > 5:
-                    print(f"MI: {adaptive_mi:.2f} | Raw: {universal_mi:.2f} | EMI: {emi:.2f} | ATT: {att:.2f}")
+                # Real-time display of transmitted LSL values
+                elapsed_time = time.time() - start_time
+                print(f"\r[{elapsed_time:6.1f}s] LSL OUT → MI: {adaptive_mi:.3f} | Raw: {universal_mi:.3f} | EMI: {emi:.3f} | ATT: {att:.3f}", end="", flush=True)
+                
+                # Detailed display every 10 seconds
+                if time.time() - last_display > 10:
+                    print(f"\n[{elapsed_time:6.1f}s] ── LSL Transmission Status ──")
+                    print(f"  📊 Mindfulness Index (MI):     {adaptive_mi:.4f}")
+                    print(f"  🧠 Raw Universal MI:           {universal_mi:.4f}")
+                    print(f"  💭 Emotional MI (EMI):         {emi:.4f}")
+                    print(f"  🎯 Attention Index (ATT):      {att:.4f}")
+                    print(f"  📈 Session samples:            {len(session_data)}")
+                    print(f"  🔄 Sampling rate:              ~{len(session_data)/elapsed_time:.1f} Hz")
                     last_display = time.time()
     
     except KeyboardInterrupt:
         print("\n[STOPPED] Processing interrupted.")
+    
+    # Final transmission summary
+    total_duration = time.time() - start_time
+    print(f"\n\n{'='*60}")
+    print("📡 LSL TRANSMISSION SUMMARY")
+    print("="*60)
+    print(f"  ⏱️  Total duration:        {total_duration:.1f} seconds")
+    print(f"  📊  Samples transmitted:   {len(session_data)}")
+    print(f"  🔄  Average rate:          {len(session_data)/total_duration:.2f} Hz")
+    if session_data:
+        data_array = np.array(session_data)
+        print(f"  📈  MI range:              {data_array[:, 0].min():.3f} - {data_array[:, 0].max():.3f}")
+        print(f"  🧠  Raw MI range:          {data_array[:, 1].min():.3f} - {data_array[:, 1].max():.3f}")
+        print(f"  💭  EMI range:             {data_array[:, 2].min():.3f} - {data_array[:, 2].max():.3f}")
+        print(f"  🎯  ATT range:             {data_array[:, 3].min():.3f} - {data_array[:, 3].max():.3f}")
+    print("="*60)
     
     # Save session data
     if session_data:
