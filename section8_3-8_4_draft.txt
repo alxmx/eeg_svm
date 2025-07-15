@@ -1,0 +1,53 @@
+Chapter 8 presents the experimental setup and results of the real-time EEG/EDA-based Mindfulness Index (MI) estimation system, as implemented and evaluated in accordance with the project protocol and MED_804-3.pdf. This chapter outlines the procedures, equipment, and evaluation metrics used to assess the effectiveness of both classic and dual calibration approaches for MI computation. The integration of immersive virtual reality (VR), synchronized biosignal acquisition, and adaptive feedback forms the foundation of the experimental design. The results section summarizes the key findings, including MI time series analysis, behavioral state classification, feature contributions, and protocol adherence, supported by quantitative metrics and visualizations. Together, these sections provide a comprehensive evaluation of the system’s performance and its alignment with the intended research objectives.
+
+8.3 Experiment Setup
+-------------------
+
+The experiment was designed to evaluate the effectiveness of real-time EEG/EDA-based Mindfulness Index (MI) estimation using both classic and dual calibration approaches. The protocol, as outlined in the project documentation and the referenced PDF, involved the following key steps:
+
+- **Participants and Equipment:**
+  - Participants were fitted with a VR headset, a 8-channel EEG cap (Fz, C3, Cz, C4, Pz, PO7, Oz, PO8), and an EDA sensor.
+  - The immersive VR environment was projected to induce varying levels of mindfulness and affective states.
+  - EEG and EDA signals were recorded synchronously using the OpenSignals platform.
+
+- **Experimental Procedure:**
+  - Each session consisted of baseline, task, and recovery phases, following the protocol in the PDF.
+  - Participants performed guided mindfulness and control tasks while physiological data were streamed and logged in real time.
+  - The dual calibration procedure was applied at the start and midpoint of each session to personalize MI thresholds and feature normalization.
+
+- **Data Acquisition and Processing:**
+  - EEG and EDA data were segmented into overlapping windows (3s, 50% overlap) for feature extraction.
+  - Features included Frontal Theta, Posterior Alpha, Frontal Alpha Asymmetry, Frontal Beta, and normalized EDA.
+  - MI was computed per window using both the classic (fixed weights, batch normalization) and dual calibration (personalized, real-time normalization) formulas.
+  - Behavioral states (Focused, Neutral, Unfocused) were classified using MI thresholds.
+
+- **Evaluation Metrics:**
+  - The system logged MI values, behavioral state predictions, and feature contributions for each window.
+  - Performance was evaluated using F1-score, precision, recall, and confusion matrices, as well as visualizations of MI time series and state distributions.
+
+
+8.4 Results
+----------
+
+The results of the experiment demonstrate the feasibility and effectiveness of real-time MI estimation using the proposed pipeline. Key findings are summarized below:
+
+- **MI Time Series and Behavioral State Distribution:**
+  - The MI time series plots (see `band_power_over_time_*.png`, `emotion_proportion_over_time.png`, and `classification_*_per_fold_big.png`) show clear transitions between focused, neutral, and unfocused states, corresponding to the experimental phases.
+  - The dual calibration approach resulted in smoother MI trajectories and more stable state classification compared to the classic method.
+
+- **Feature Contributions:**
+  - Feature contribution plots indicate that Frontal Theta and Posterior Alpha were the most influential in MI calculation, with EDA providing additional discriminative power during stress or arousal phases.
+
+- **Classification Performance:**
+  - The SVM classifier achieved high F1-scores and balanced precision/recall across all behavioral states, as shown in the provided visualizations.
+  - Confusion matrices indicate that most misclassifications occurred between Neutral and Unfocused states, consistent with the protocol's expectations.
+
+- **Protocol Adherence and Observations:**
+  - All sessions followed the protocol as described in the PDF, with successful synchronization of EEG, EDA, and VR event markers.
+  - The dual calibration method improved robustness to inter-individual variability and session drift, as evidenced by more consistent MI distributions across participants.
+
+- **Limitations and Future Work:**
+  - Some sessions exhibited signal artifacts or missing EDA data, which were handled by the pipeline's artifact rejection and imputation strategies.
+  - Future work will focus on expanding the participant pool, refining feature selection, and integrating additional physiological signals for enhanced MI estimation.
+
+Visualizations and detailed metrics are included in the report appendices and referenced figures.
