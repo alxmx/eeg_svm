@@ -96,10 +96,13 @@ def analyze_all_sessions():
     files = glob.glob(os.path.join(DATA_DIR, "*.csv"))  # Adjust extension as needed
     with PdfPages(PDF_REPORT) as pdf:
         summary_text = []
+        session_dfs = []
+        session_lengths = []
+        session_files = []
+        # First pass: summary and raw file handling
         for file in files:
             df = pd.read_csv(file)
             summary_text.append(f"\nAnalyzing {file}\n")
-            # 2. Descriptive stats
             if set(['variable', 'mean', 'std', 'min', 'max']).issubset(df.columns):
                 summary_text.append("Summary statistics file detected.")
                 summary_text.append(str(df))
@@ -121,6 +124,9 @@ def analyze_all_sessions():
                         plt.close()
                     else:
                         summary_text.append(f"{col} is non-numeric, skipping stats and plot.\n")
+                session_dfs.append(df)
+                session_lengths.append(len(df))
+                session_files.append(file)
         # Add summary text as a PDF page
         plt.figure(figsize=(8.5, 11))
         plt.axis('off')
@@ -128,16 +134,31 @@ def analyze_all_sessions():
         pdf.savefig()
         plt.close()
 
-        session_dfs = []
-        session_lengths = []
-        session_files = []
-
-        for file in files:
-            df = pd.read_csv(file)
-            if not set(['variable', 'mean', 'std', 'min', 'max']).issubset(df.columns):
-                session_dfs.append(df)
-                session_lengths.append(len(df))
-                session_files.append(file)
+        # Short comparative MI report
+        mi_stats = []
+        plt.figure(figsize=(12, 6))
+        for i, df in enumerate(session_dfs):
+            mi_col = next((c for c in df.columns if c.lower() in ['mi', 'adaptive mi', 'universal mi']), None)
+            if mi_col and pd.api.types.is_numeric_dtype(df[mi_col]):
+                plt.plot(range(len(df)), df[mi_col], label=os.path.basename(session_files[i]))
+                stats = df[mi_col].agg(['mean', 'std', 'min', 'max'])
+                mi_stats.append([os.path.basename(session_files[i])] + list(stats))
+        plt.title("MI over Time: All Sessions")
+        plt.xlabel("Time (s)")
+        plt.ylabel("MI")
+        plt.legend()
+        pdf.savefig()
+        plt.close()
+        # Create a summary table for MI
+        if mi_stats:
+            mi_stats_df = pd.DataFrame(mi_stats, columns=["Session", "Mean", "Std", "Min", "Max"])
+            plt.figure(figsize=(8.5, 11))
+            plt.axis('off')
+            plt.title("MI Session Statistics")
+            table_text = mi_stats_df.to_string(index=False)
+            plt.text(0, 1, table_text, fontsize=10, va='top')
+            pdf.savefig()
+            plt.close()
 
         # Group sessions by length
         less3_idx = [i for i, l in enumerate(session_lengths) if l < 180]
@@ -204,36 +225,3 @@ def analyze_all_sessions():
 if __name__ == "__main__":
     analyze_all_sessions()
     print(f"PDF report saved as {PDF_REPORT}")
-
-import os
-import pandas as pd
-import matplotlib.pyplot as plt
-
-DATA_DIR = "final_implementation/logs"
-files = [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
-
-for file in files:
-    df = pd.read_csv(file)
-    print(f"\nFile: {file}")
-    # Detect summary statistics file
-    if set(['variable', 'mean', 'std', 'min', 'max']).issubset(df.columns):
-        print("Summary statistics file detected.")
-        print(df)
-        # Optionally, plot bar charts for means/stds
-        df.plot(x='variable', y='mean', kind='bar', title=f"Mean values in {file}")
-        plt.show()
-    else:
-        print("Raw feature time series detected.")
-        time = range(len(df))
-        for col in df.columns:
-            plt.figure()
-            plt.plot(time, df[col])
-            plt.title(f"{col} over Time (1 Hz) in {file}")
-            plt.xlabel("Time (s)")
-            plt.ylabel(col)
-            plt.show()
-            if pd.api.types.is_numeric_dtype(df[col]):
-                stats = df[col].agg(['mean', 'std', 'min', 'max', 'median'])
-                print(f"{col} stats:\n{stats}\n")
-            else:
-                print(f"{col} is non-numeric, skipping stats.\n")
