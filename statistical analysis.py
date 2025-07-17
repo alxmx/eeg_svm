@@ -96,131 +96,41 @@ def analyze_all_sessions():
     files = glob.glob(os.path.join(DATA_DIR, "*.csv"))  # Adjust extension as needed
     with PdfPages(PDF_REPORT) as pdf:
         summary_text = []
-        session_dfs = []
-        session_lengths = []
-        session_files = []
-        # First pass: summary and raw file handling
         for file in files:
             df = pd.read_csv(file)
             summary_text.append(f"\nAnalyzing {file}\n")
-            if set(['variable', 'mean', 'std', 'min', 'max']).issubset(df.columns):
-                summary_text.append("Summary statistics file detected.")
-                summary_text.append(str(df))
-                df.plot(x='variable', y='mean', kind='bar', title=f"Mean values in {file}")
-                pdf.savefig()
-                plt.close()
-            else:
-                summary_text.append("Raw feature time series detected.")
-                for col in df.columns:
-                    if pd.api.types.is_numeric_dtype(df[col]):
-                        stats = df[col].agg(['mean', 'std', 'min', 'max', 'median'])
-                        summary_text.append(f"{col} stats:\n{stats}\n")
-                        plt.figure()
-                        plt.plot(range(len(df)), df[col])
-                        plt.title(f"{col} over Time (1 Hz) in {file}")
-                        plt.xlabel("Time (s)")
-                        plt.ylabel(col)
-                        pdf.savefig()
-                        plt.close()
-                    else:
-                        summary_text.append(f"{col} is non-numeric, skipping stats and plot.\n")
-                session_dfs.append(df)
-                session_lengths.append(len(df))
-                session_files.append(file)
+            # 2. Descriptive stats
+            stats = descriptive_stats(df)
+            summary_text.append("Descriptive Stats:\n" + str(stats))
+            # 3. Time series and phase analysis
+            plot_time_series(df, pdf)
+            phase_result = phase_comparison(df, pdf)
+            summary_text.append(phase_result)
+            # 4. Classification performance
+            if 'true_state' in df.columns and 'pred_state' in df.columns:
+                cm_report = confusion_matrix_report(df, pdf)
+                summary_text.append(cm_report)
+            # 5. Feature contribution
+            feature_cols = [col for col in df.columns if col.startswith('feature_')]
+            if feature_cols:
+                feat_imp = feature_importance(df, pdf, feature_cols)
+                summary_text.append("Feature-MI Correlation:\n" + feat_imp)
+            # 6. Calibration quality
+            if 'calibration_phase' in df.columns:
+                cal_qual = calibration_quality(df, pdf)
+                summary_text.append("Calibration Quality:\n" + cal_qual)
+            # 7. Protocol adherence
+            if 'event_marker' in df.columns:
+                prot = protocol_adherence(df)
+                summary_text.append(prot)
         # Add summary text as a PDF page
+        from matplotlib.backends.backend_pdf import PdfPages
+        from matplotlib import pyplot as plt
         plt.figure(figsize=(8.5, 11))
         plt.axis('off')
         plt.text(0, 1, "\n\n".join(summary_text), fontsize=8, va='top')
         pdf.savefig()
         plt.close()
-
-        # Short comparative MI report
-        mi_stats = []
-        plt.figure(figsize=(12, 6))
-        for i, df in enumerate(session_dfs):
-            mi_col = next((c for c in df.columns if c.lower() in ['mi', 'adaptive mi', 'universal mi']), None)
-            if mi_col and pd.api.types.is_numeric_dtype(df[mi_col]):
-                plt.plot(range(len(df)), df[mi_col], label=os.path.basename(session_files[i]))
-                stats = df[mi_col].agg(['mean', 'std', 'min', 'max'])
-                mi_stats.append([os.path.basename(session_files[i])] + list(stats))
-        plt.title("MI over Time: All Sessions")
-        plt.xlabel("Time (s)")
-        plt.ylabel("MI")
-        plt.legend()
-        pdf.savefig()
-        plt.close()
-        # Create a summary table for MI
-        if mi_stats:
-            mi_stats_df = pd.DataFrame(mi_stats, columns=["Session", "Mean", "Std", "Min", "Max"])
-            plt.figure(figsize=(8.5, 11))
-            plt.axis('off')
-            plt.title("MI Session Statistics")
-            table_text = mi_stats_df.to_string(index=False)
-            plt.text(0, 1, table_text, fontsize=10, va='top')
-            pdf.savefig()
-            plt.close()
-
-        # Group sessions by length
-        less3_idx = [i for i, l in enumerate(session_lengths) if l < 180]
-        more5_idx = [i for i, l in enumerate(session_lengths) if l > 300]
-
-        def get_common_numeric_cols(dfs, idxs):
-            if not idxs:
-                return []
-            numeric_cols = [set([c for c in dfs[i].columns if pd.api.types.is_numeric_dtype(dfs[i][c])]) for i in idxs]
-            return set.intersection(*numeric_cols) if numeric_cols else set()
-
-        # Plot for <3 min sessions
-        common_cols_less3 = get_common_numeric_cols(session_dfs, less3_idx)
-        for col in common_cols_less3:
-            plt.figure()
-            for i in less3_idx:
-                plt.plot(range(len(session_dfs[i])), session_dfs[i][col], label=os.path.basename(session_files[i]))
-            plt.title(f"{col} comparison (<3 min sessions)")
-            plt.xlabel("Time (s)")
-            plt.ylabel(col)
-            plt.legend()
-            pdf.savefig()
-            plt.close()
-
-        # Plot for >5 min sessions
-        common_cols_more5 = get_common_numeric_cols(session_dfs, more5_idx)
-        for col in common_cols_more5:
-            plt.figure()
-            for i in more5_idx:
-                plt.plot(range(len(session_dfs[i])), session_dfs[i][col], label=os.path.basename(session_files[i]))
-            plt.title(f"{col} comparison (>5 min sessions)")
-            plt.xlabel("Time (s)")
-            plt.ylabel(col)
-            plt.legend()
-            pdf.savefig()
-            plt.close()
-
-        # Plot all <3 min sessions together
-        if less3_idx:
-            plt.figure()
-            for col in common_cols_less3:
-                for i in less3_idx:
-                    plt.plot(range(len(session_dfs[i])), session_dfs[i][col], label=f"{col}-{os.path.basename(session_files[i])}")
-            plt.title("All <3 min sessions (all parameters)")
-            plt.xlabel("Time (s)")
-            plt.ylabel("Value")
-            plt.legend()
-            pdf.savefig()
-            plt.close()
-
-        # Plot all >5 min sessions together
-        if more5_idx:
-            plt.figure()
-            for col in common_cols_more5:
-                for i in more5_idx:
-                    plt.plot(range(len(session_dfs[i])), session_dfs[i][col], label=f"{col}-{os.path.basename(session_files[i])}")
-            plt.title("All >5 min sessions (all parameters)")
-            plt.xlabel("Time (s)")
-            plt.ylabel("Value")
-            plt.legend()
-            pdf.savefig()
-            plt.close()
 
 if __name__ == "__main__":
     analyze_all_sessions()
