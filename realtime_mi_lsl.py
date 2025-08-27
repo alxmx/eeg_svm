@@ -553,6 +553,50 @@ def run_experiment(user_id, calibration_samples=100, experiment_duration_sec=240
             visualizer.update(mi_pred)
     print("Experiment complete.")
 
+# --- MISSING FUNCTION DEFINITIONS ---
+def calculate_raw_mi(features):
+    """Calculate raw MI (pre-sigmoid) for more dynamic range"""
+    weights = np.array([0.25, 0.25, 0.2, -0.15, -0.1])
+    raw_mi = np.dot(features, weights) - 0.5
+    return np.clip(raw_mi, -50, 50)  # Prevent overflow
+
+def remap_raw_mi(raw_mi):
+    """Remap raw MI to 0-1 range with scaled sigmoid for LSL output"""
+    # Clamp input to prevent overflow
+    raw_mi = np.clip(raw_mi, -50, 50)
+    # Apply scaled sigmoid remapping
+    mi_remapped = 1 / (1 + np.exp(-3 * raw_mi))
+    return np.clip(mi_remapped, 0, 1)
+
+def calculate_emi(features):
+    """Calculate Emotional Mindfulness Index - more sensitive to emotional features"""
+    # EMI gives more weight to frontal alpha asymmetry (FAA) and EDA
+    weights = np.array([0.15, 0.15, 0.4, -0.1, -0.2])
+    emi_raw = np.dot(features, weights) - 0.3
+    emi_raw = np.clip(emi_raw, -50, 50)  # Prevent overflow
+    emi = 1 / (1 + np.exp(-2 * emi_raw))
+    return np.clip(emi, 0, 1)
+
+def setup_mindfulness_lsl_streams():
+    """Create LSL streams for MI and related values"""
+    # Create LSL stream for MI (standard 0-1 range)
+    mi_info = StreamInfo('MindfulnessIndex', 'MI', 1, 10, 'float32', 'mi_12345')
+    mi_outlet = StreamOutlet(mi_info)
+    
+    # Create LSL stream for raw MI (more dynamic range)
+    raw_mi_info = StreamInfo('RawMindfulnessIndex', 'RawMI', 1, 10, 'float32', 'raw_mi_12345')
+    raw_mi_outlet = StreamOutlet(raw_mi_info)
+    
+    # Create LSL stream for EMI (emotional mindfulness index)
+    emi_info = StreamInfo('EmotionalMindfulnessIndex', 'EMI', 1, 10, 'float32', 'emi_12345')
+    emi_outlet = StreamOutlet(emi_info)
+    
+    return {
+        'mi': mi_outlet,
+        'raw_mi': raw_mi_outlet,
+        'emi': emi_outlet
+    }
+
 # --- MAIN ENTRY ---
 def main():
     print("\n==============================")
